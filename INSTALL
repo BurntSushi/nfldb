@@ -1,0 +1,17 @@
+It should be as straight-forward as
+
+  sudo python2 setup.py install
+
+You should now be able to run a Python interpreter and e.g., find out
+the URL of an HLS stream of an NFL game:
+
+[andrew@Liger ~] python2
+Python 2.7.5 (default, May 12 2013, 12:00:47) 
+[GCC 4.8.0 20130502 (prerelease)] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import nflgame
+>>> import nflvid
+>>> g = nflgame.one(2012, 5, 'NE', 'NE')
+>>> print nflvid.footage_url(g)
+http://nlds82.cdnl3nl.neulion.com/nlds_vod/nfl/vod/2012/10/07/55577/2_55577_den_ne_2012_h_whole_1_1600.mp4.m3u8
+
