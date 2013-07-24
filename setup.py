@@ -37,6 +37,6 @@ setup(
     # package_data={'nfldb': ['schedule-status', 'pbp-xml/*.xml.gz']}, 
     data_files=[('share/doc/nfldb', ['README.md', 'COPYING', 'INSTALL']),
                 ('share/doc/nfldb/doc', docfiles)],
-    install_requires=['nflgame'],
+    install_requires=['nflgame', 'toml'],
     scripts=[]
 )
