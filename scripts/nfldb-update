@@ -1,0 +1,6 @@
+#!/usr/bin/env python2.7
+
+import nfldb
+
+conn = nfldb.connect()
+print nfldb.version(conn)

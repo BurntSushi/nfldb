@@ -1,2 +1,4 @@
 .*.swp
 config.toml
+tags
+doc
