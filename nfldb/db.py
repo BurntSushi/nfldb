@@ -61,7 +61,7 @@ def version(conn):
     Returns the schema version of the given database. If the version
     is not stored in the database, then 0 is returned.
     """
-    with _tx(conn) as c:
+    with Tx(conn) as c:
         try:
             c.execute('SELECT value FROM meta WHERE name = %s', ['version'])
         except psycopg2.ProgrammingError:
@@ -82,33 +82,50 @@ def _is_empty(conn):
     Returns True if and only if there are no tables in the given
     database.
     """
-    with _tx(conn) as c:
+    with Tx(conn) as c:
         c.execute('''
             SELECT COUNT(*) AS count FROM information_schema.tables
             WHERE table_catalog = %s AND table_schema = 'public'
         ''', [_db_name(conn)])
         if c.fetchone().count == 0:
             return True
-        return False
+    return False
 
 
-class _tx (object):
+class Tx (object):
+    """
+    Tx is a "with" compatible class that abstracts a transaction
+    given a connection. If an exception occurs inside the with
+    block, then rollback is automatically called. Otherwise, upon
+    exit of the with block, commit is called.
+
+    Use it like so::
+
+        with Tx(conn) as cursor:
+            ...
+
+    Which is meant to be equivalent to the following::
+
+        with conn:
+            with conn.cursor() as curs:
+                ...
+    """
     def __init__(self, psycho_conn):
-        self.conn = psycho_conn
-        self.cursor = None
+        self.__conn = psycho_conn
+        self.__cursor = None
 
     def __enter__(self):
-        self.cursor = self.conn.cursor()
-        return self.cursor
+        self.__cursor = self.__conn.cursor()
+        return self.__cursor
 
     def __exit__(self, typ, value, traceback):
-        if not self.cursor.closed:
-            self.cursor.close()
+        if not self.__cursor.closed:
+            self.__cursor.close()
         if typ is not None:
-            self.conn.rollback()
+            self.__conn.rollback()
             return False
         else:
-            self.conn.commit()
+            self.__conn.commit()
             return True
 
 
@@ -132,7 +149,7 @@ def _migrate(conn, to):
     globs = globals()
     for v in xrange(current+1, to+1):
         fname = '_migrate_%d' % v
-        with _tx(conn) as c:
+        with Tx(conn) as c:
             assert fname in globs, 'Migration function %d not defined.' % v
             globs[fname](c)
             c.execute("UPDATE meta SET value = %s WHERE name = 'version'", [v])

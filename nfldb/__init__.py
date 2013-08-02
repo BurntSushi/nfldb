@@ -1,4 +1,5 @@
 from nfldb.db import api_version, connect, version
+from nfldb.db import Tx
 
 api_version = api_version  # Doco hack for epydoc.
 """
@@ -11,4 +12,5 @@ version before doing anything else.
 # Export selected identifiers from sub-modules.
 __all__ = [
     'api_version', 'connect', 'version',  # nfldb.db
+    'Tx',
 ]
