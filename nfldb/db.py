@@ -163,3 +163,40 @@ def _migrate_1(c):
         )
     ''')
     c.execute("INSERT INTO meta (name, value) VALUES ('version', '1')")
+
+def _migrate_2(c):
+    c.execute('''
+        CREATE TYPE
+            game_phase
+        AS ENUM ('pre', '1', '2', 'half', '3', '4', 'overtime', 'final')
+    ''')
+    c.execute('''
+        CREATE DOMAIN usmallint AS smallint
+                          CHECK (VALUE >= 0)
+    ''')
+    c.execute('''
+        CREATE DOMAIN gameclock AS smallint
+                          CHECK (VALUE >= 0 AND VALUE <= 900)
+    ''')
+    c.execute('''
+        CREATE DOMAIN fieldpos AS smallint
+                          CHECK (VALUE >= -50 AND VALUE <= 50)
+    ''')
+    c.execute('''
+        CREATE TABLE play (
+            gsis_id character varying (10) NOT NULL,
+            drive_id usmallint NOT NULL,
+            play_id usmallint NOT NULL,
+            quarter game_phase NOT NULL,
+            clock gameclock NOT NULL,
+            pos_team character varying (3) NOT NULL,
+            yardline fieldpos NULL,
+            down smallint NULL
+                CHECK (down >= 1 AND down <= 4),
+            yards_to_go smallint NULL
+                CHECK (yards_to_go >= 0 AND yards_to_go <= 100),
+            description text NULL,
+            note text NULL,
+            PRIMARY KEY (gsis_id, drive_id, play_id)
+        )
+    ''')
