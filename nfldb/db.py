@@ -26,7 +26,9 @@ enums = {
     'category_scope': ['play', 'player'],
 }
 
-def connect(database=None, user=None, password=None, host=None, port=None):
+
+def connect(database=None, user=None, password=None, host=None, port=None,
+            timezone=None):
     """
     Returns a pgsql connection from the psycopg2 library. If
     database is None, then connect will look for a configuration
@@ -42,6 +44,10 @@ def connect(database=None, user=None, password=None, host=None, port=None):
     version, then this function will raise an assertion error.
     An assertion error will also be raised if the schema version
     is 0 and the database is not empty.
+
+    N.B. The timezone parameter should be set to a value that
+    PostgreSQL will accept. Select from the "pg_timezone_names"
+    view to get a list of valid time zones.
     """
     if database is None:
         try:
@@ -54,9 +60,11 @@ def connect(database=None, user=None, password=None, host=None, port=None):
         password = conf['pgsql'].get('password', None)
         host = conf['pgsql'].get('host', None)
         port = conf['pgsql'].get('port', None)
+        timezone = conf.get('timezone', 'US/Eastern')
     conn = psycopg2.connect(database=database, user=user, password=password,
                             host=host, port=port,
                             cursor_factory=NamedTupleCursor)
+    set_timezone(conn, timezone)
 
     # Start the migration. Make sure if this is the initial setup that
     # the DB is empty.
@@ -85,6 +93,20 @@ def version(conn):
         if c.rowcount == 0:
             return 0
         return int(c.fetchone().value)
+
+
+def set_timezone(conn, timezone):
+    """
+    Sets the timezone for which all datetimes will be displayed
+    as. Valid values are exactly the same set of values accepted
+    by PostgreSQL. (Select from the "pg_timezone_names" view to
+    get a list of valid time zones.)
+
+    Note that all datetimes are stored in UTC. This setting only
+    affects how datetimes are viewed from select queries.
+    """
+    with Tx(conn) as c:
+        c.execute('SET timezone = %s', (timezone,))
 
 
 def _db_name(conn):

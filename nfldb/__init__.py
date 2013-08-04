@@ -1,4 +1,4 @@
-from nfldb.db import api_version, connect, version
+from nfldb.db import api_version, connect, enums, set_timezone, version
 from nfldb.db import Tx
 
 api_version = api_version  # Doco hack for epydoc.
@@ -18,6 +18,7 @@ of each list is the same as the ordering in the database.
 
 # Export selected identifiers from sub-modules.
 __all__ = [
-    'api_version', 'connect', 'version',  # nfldb.db
+    # nfldb.db
+    'api_version', 'connect', 'enums', 'set_timezone', 'version',
     'Tx',
 ]
