@@ -1,3 +1,5 @@
+import csv
+import os.path as path
 import re
 import sys
 
@@ -21,6 +23,7 @@ enums = {
     'playerpos': ['C', 'CB', 'DB', 'DE', 'DL', 'DT', 'FB', 'FS', 'G', 'ILB',
                   'K', 'LB', 'LS', 'MLB', 'NT', 'OG', 'OL', 'OLB', 'OT', 'P',
                   'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR'],
+    'category_scope': ['play', 'player'],
 }
 
 def connect(database=None, user=None, password=None, host=None, port=None):
@@ -104,6 +107,11 @@ def _is_empty(conn):
     return False
 
 
+def _mogrify(cursor, xs):
+    """Shortcut for mogrifying a list as if it were a tuple."""
+    return cursor.mogrify('%s', (tuple(xs),))
+
+
 class Tx (object):
     """
     Tx is a "with" compatible class that abstracts a transaction
@@ -176,8 +184,6 @@ def _migrate_1(c):
     ''')
     c.execute("INSERT INTO meta (name, value) VALUES ('version', '1')")
 
-def _mogrify(cursor, xs):
-    return cursor.mogrify('%s', (tuple(xs),))
 
 def _migrate_2(c):
     # Create some types and common constraints.
@@ -193,6 +199,9 @@ def _migrate_2(c):
     c.execute('''
         CREATE TYPE playerpos AS ENUM %s
     ''' % _mogrify(c, enums['playerpos']))
+    c.execute('''
+        CREATE TYPE category_scope AS ENUM %s
+    ''' % _mogrify(c, enums['category_scope']))
     c.execute('''
         CREATE DOMAIN gameid AS character varying (10)
                           CHECK (char_length(VALUE) = 10)
@@ -228,11 +237,19 @@ def _migrate_2(c):
         CREATE TABLE category (
             category_id character varying (50) NOT NULL,
             gsis_number usmallint NOT NULL,
+            category_type category_scope NOT NULL,
             description text,
             PRIMARY KEY (category_id)
         )
     ''')
-            
+    with open(path.join(path.split(__file__)[0], 'data-dictionary.csv')) as f:
+        c.execute('''
+            INSERT INTO category
+                (gsis_number, category_type, category_id, description)
+            VALUES %s
+        ''' % (', '.join(_mogrify(c, row)
+               for row in csv.reader(f, delimiter='\t'))))
+
     # Create the rest of the schema.
     c.execute('''
         CREATE TABLE player (

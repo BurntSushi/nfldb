@@ -9,6 +9,13 @@ connect will automatically update the schema to the latest
 version before doing anything else.
 """
 
+enums = enums  # Doco hack for epydoc.
+"""
+Enums is a dictionary that contains all possible values for each
+enum type in the database, represented as lists. The ordering
+of each list is the same as the ordering in the database.
+"""
+
 # Export selected identifiers from sub-modules.
 __all__ = [
     'api_version', 'connect', 'version',  # nfldb.db
