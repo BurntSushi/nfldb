@@ -391,6 +391,7 @@ def _migrate_2(c):
             play_id usmallint NOT NULL,
             player_id integer NOT NULL,
             category_id character varying (50) NOT NULL,
+            value real NOT NULL,
             PRIMARY KEY (gsis_id, drive_id, play_id, player_id, category_id),
             FOREIGN KEY (gsis_id, drive_id, play_id)
                 REFERENCES play (gsis_id, drive_id, play_id)
