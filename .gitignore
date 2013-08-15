@@ -2,3 +2,5 @@
 config.toml
 tags
 doc
+MANIFEST
+dist
