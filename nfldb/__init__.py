@@ -1,24 +1,28 @@
-from nfldb.db import api_version, connect, enums, set_timezone, version
+"""
+Module nfldb provides command line tools and a library for maintaining
+and querying a relational database of play-by-play NFL data.
+"""
+
+from nfldb.db import __pdoc__ as __db_pdoc__
+from nfldb.db import api_version, connect, enums, set_timezone, schema_version
 from nfldb.db import Tx
+from nfldb.types import __pdoc__ as __types_pdoc__
+from nfldb.types import Game
+from nfldb.version import __version__
 
-api_version = api_version  # Doco hack for epydoc.
-"""
-The schema version that this library corresponds to.
-When the schema version of the database is less than this value,
-connect will automatically update the schema to the latest
-version before doing anything else.
-"""
+__pdoc__ = __db_pdoc__
+__pdoc__ = dict(__pdoc__, **__types_pdoc__)
 
-enums = enums  # Doco hack for epydoc.
-"""
-Enums is a dictionary that contains all possible values for each
-enum type in the database, represented as lists. The ordering
-of each list is the same as the ordering in the database.
-"""
 
 # Export selected identifiers from sub-modules.
 __all__ = [
     # nfldb.db
-    'api_version', 'connect', 'enums', 'set_timezone', 'version',
+    'api_version', 'connect', 'enums', 'set_timezone', 'schema_version',
     'Tx',
+
+    # nfldb.types
+    'Game',
+
+    # nfldb.version
+    '__version__',
 ]

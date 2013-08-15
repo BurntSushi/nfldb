@@ -10,11 +10,17 @@ import toml
 
 import nflgame
 
+__pdoc__ = {}
 
-# Documented in __init__.py to appease epydoc.
 api_version = 1
+__pdoc__['api_version'] = \
+    """
+    The schema version that this library corresponds to. When the schema
+    version of the database is less than this value, `nfldb.connect` will
+    automatically update the schema to the latest version before doing
+    anything else.
+    """
 
-# Documented in __init__.py to appease epydoc.
 enums = {
     'game_phase': ['PREGAME', '1', '2', 'HALF-TIME',
                    '3', '4', 'OVERTIME', 'FINAL'],
@@ -25,29 +31,37 @@ enums = {
                   'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR'],
     'category_scope': ['play', 'player'],
 }
+__pdoc__['enums'] = \
+    """
+    Enums is a dictionary that contains all possible values for each enum
+    type in the database, represented as lists. The ordering of each list
+    is the same as the ordering in the database.
+    """
 
 
 def connect(database=None, user=None, password=None, host=None, port=None,
             timezone=None):
     """
-    Returns a pgsql connection from the psycopg2 library. If
-    database is None, then connect will look for a configuration
-    file at $XDG_CONFIG_HOME/nfldb/config.toml with the database
-    connection information. Otherwise, the connection will use
-    the parameters given.
+    Returns a `psycopg2._psycopg.connection` object from the
+    `psycopg2.connect`. If database is `None`, then `connect` will look
+    for a configuration file at `$XDG_CONFIG_HOME/nfldb/config.toml`
+    with the database connection information. Otherwise, the connection
+    will use the parameters given.
 
-    This function will also compare the current schema version of
-    the database against the library version and assert that they
-    are equivalent. If the schema library version is less than the
-    the library version, then the schema will be automatically
-    upgraded. If the schema version is newer than the library
-    version, then this function will raise an assertion error.
-    An assertion error will also be raised if the schema version
-    is 0 and the database is not empty.
+    This function will also compare the current schema version of the
+    database against the API version `nfldb.api_version` and assert
+    that they are equivalent. If the schema library version is less
+    than the the API version, then the schema will be automatically
+    upgraded. If the schema version is newer than the library version,
+    then this function will raise an assertion error.  An assertion
+    error will also be raised if the schema version is 0 and the
+    database is not empty.
 
-    N.B. The timezone parameter should be set to a value that
-    PostgreSQL will accept. Select from the "pg_timezone_names"
-    view to get a list of valid time zones.
+    N.B. The `timezone` parameter should be set to a value that
+    PostgreSQL will accept. Select from the `pg_timezone_names` view
+    to get a list of valid time zones. (Like the other parameters,
+    when `database` is `None`, the `timezone` parameter is filled from
+    `config.toml`.)
     """
     if database is None:
         try:
@@ -68,21 +82,21 @@ def connect(database=None, user=None, password=None, host=None, port=None,
 
     # Start the migration. Make sure if this is the initial setup that
     # the DB is empty.
-    schema_version = version(conn)
-    assert schema_version <= api_version, \
+    sversion = schema_version(conn)
+    assert sversion <= api_version, \
         'Library with version %d is older than the schema with version %d' \
-        % (api_version, schema_version)
-    assert schema_version > 0 or (schema_version == 0 and _is_empty(conn)), \
+        % (api_version, sversion)
+    assert sversion > 0 or (sversion == 0 and _is_empty(conn)), \
         'Schema has version 0 but is not empty.'
     _migrate(conn, api_version)
 
     return conn
 
 
-def version(conn):
+def schema_version(conn):
     """
     Returns the schema version of the given database. If the version
-    is not stored in the database, then 0 is returned.
+    is not stored in the database, then `0` is returned.
     """
     with Tx(conn) as c:
         try:
@@ -99,7 +113,7 @@ def set_timezone(conn, timezone):
     """
     Sets the timezone for which all datetimes will be displayed
     as. Valid values are exactly the same set of values accepted
-    by PostgreSQL. (Select from the "pg_timezone_names" view to
+    by PostgreSQL. (Select from the `pg_timezone_names` view to
     get a list of valid time zones.)
 
     Note that all datetimes are stored in UTC. This setting only
@@ -116,7 +130,7 @@ def _db_name(conn):
 
 def _is_empty(conn):
     """
-    Returns True if and only if there are no tables in the given
+    Returns `True` if and only if there are no tables in the given
     database.
     """
     with Tx(conn) as c:
@@ -136,18 +150,20 @@ def _mogrify(cursor, xs):
 
 class Tx (object):
     """
-    Tx is a "with" compatible class that abstracts a transaction
-    given a connection. If an exception occurs inside the with
-    block, then rollback is automatically called. Otherwise, upon
-    exit of the with block, commit is called.
+    Tx is a `with` compatible class that abstracts a transaction given
+    a connection. If an exception occurs inside the `with` block, then
+    rollback is automatically called. Otherwise, upon exit of the with
+    block, commit is called.
 
-    Use it like so::
+    Use it like so:
 
+        #!python
         with Tx(conn) as cursor:
             ...
 
-    Which is meant to be equivalent to the following::
+    Which is meant to be equivalent to the following:
 
+        #!python
         with conn:
             with conn.cursor() as curs:
                 ...
@@ -185,7 +201,7 @@ class Tx (object):
 
 
 def _migrate(conn, to):
-    current = version(conn)
+    current = schema_version(conn)
     assert current <= to
 
     globs = globals()

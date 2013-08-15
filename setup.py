@@ -1,19 +1,22 @@
+import codecs
 from distutils.core import setup
-import os
+from glob import glob
+import os.path as path
 
-longdesc = \
-'''A library to manage a relational database containing NFL data, including play-by-play statistics. The library also includes several scripts for maintaining and updating your database, including monitoring live games and keeping statistics up to date in near-realtime.'''
+cwd = path.dirname(__file__)
+longdesc = codecs.open(path.join(cwd, 'longdesc.rst'), 'r', 'utf-8').read()
 
-try:
-    docfiles = map(lambda s: 'doc/%s' % s, list(os.walk('doc'))[0][2])
-except IndexError:
-    docfiles = []
+version = '0.0.0'
+with codecs.open(path.join(cwd, 'nfldb/version.py'), 'r', 'utf-8') as f:
+    exec(f.read())
+    version = __version__
+assert version != '0.0.0'
 
 setup(
     name='nfldb',
     author='Andrew Gallant',
     author_email='nfldb@burntsushi.net',
-    version='0.0.1',
+    version=version,
     license='WTFPL',
     description='A library to manage and update NFL data in a relational '
                 'database.',
@@ -33,10 +36,9 @@ setup(
     ],
     platforms='ANY',
     packages=['nfldb'],
-    package_dir={'nfldb': 'nfldb'},
-    # package_data={'nfldb': ['schedule-status', 'pbp-xml/*.xml.gz']}, 
-    data_files=[('share/doc/nfldb', ['README.md', 'COPYING', 'INSTALL']),
-                ('share/doc/nfldb/doc', docfiles)],
-    install_requires=['nflgame', 'toml'],
+    data_files=[('share/doc/nfldb', ['README.md', 'longdesc.rst',
+                                     'COPYING', 'INSTALL']),
+                ('share/doc/nfldb/doc', glob('doc/nfldb/*.html'))],
+    install_requires=['nflgame', 'toml', 'psycopg2'],
     scripts=[]
 )
