@@ -3,4 +3,4 @@
 import nfldb
 
 conn = nfldb.connect()
-print nfldb.version(conn)
+print nfldb.schema_version(conn)
