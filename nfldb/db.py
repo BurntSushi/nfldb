@@ -21,22 +21,27 @@ __pdoc__['api_version'] = \
     anything else.
     """
 
-enums = {
-    'game_phase': ['PREGAME', '1', '2', 'HALF-TIME',
-                   '3', '4', 'OVERTIME', 'FINAL'],
-    'season_phase': ['Preseason', 'Regular season', 'Postseason'],
-    'gameday': ['Sunday', 'Monday', 'Thursday', 'Friday', 'Saturday'],
-    'playerpos': ['C', 'CB', 'DB', 'DE', 'DL', 'DT', 'FB', 'FS', 'G', 'ILB',
-                  'K', 'LB', 'LS', 'MLB', 'NT', 'OG', 'OL', 'OLB', 'OT', 'P',
-                  'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR'],
-    'category_scope': ['play', 'player'],
-}
-__pdoc__['enums'] = \
+
+class Enums (object):
     """
-    Enums is a dictionary that contains all possible values for each enum
-    type in the database, represented as lists. The ordering of each list
-    is the same as the ordering in the database.
+    Enums groups all enum types used in the database schema.
+    All possible values for each enum type are represented as lists.
+    The ordering of each list is the same as the ordering in the
+    database.
     """
+
+    game_phase = ['PREGAME', '1', '2', 'HALF-TIME',
+                  '3', '4', 'OVERTIME', 'FINAL']
+
+    season_phase = ['Preseason', 'Regular season', 'Postseason']
+
+    gameday = ['Sunday', 'Monday', 'Thursday', 'Friday', 'Saturday']
+
+    playerpos = ['C', 'CB', 'DB', 'DE', 'DL', 'DT', 'FB', 'FS', 'G', 'ILB',
+                 'K', 'LB', 'LS', 'MLB', 'NT', 'OG', 'OL', 'OLB', 'OT', 'P',
+                 'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR']
+
+    category_scope = ['play', 'player']
 
 
 def connect(database=None, user=None, password=None, host=None, port=None,

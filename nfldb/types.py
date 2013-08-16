@@ -22,7 +22,7 @@ class Game (object):
         """
         A Python datetime object corresponding to the
         start time of the game. The timezone of this value will be
-        equivalent to the timezone specified by ``set_timezone`` (which is
+        equivalent to the timezone specified by `set_timezone` (which is
         by default set to the value specified in the configuration file).
         """
 
@@ -36,7 +36,7 @@ class Game (object):
     __pdoc__['Game.day_of_week'] = \
         """
         The day of the week this game was played on.
-        Possible values correspond to the ``gameday`` enum.
+        Possible values correspond to the `nfldb.Enums.gameday` enum.
         """
 
     __pdoc__['Game.season_year'] = \
@@ -48,9 +48,9 @@ class Game (object):
 
     __pdoc__['Game.season_type'] = \
         """
-        The phase of the season. e.g., ``Preseason``,
-        ``Regular season`` or `Postseason``. All valid values correspond
-        to the ``season_phase`` enum.
+        The phase of the season. e.g., `Preseason`,
+        `Regular season` or `Postseason`. All valid values correspond
+        to the `nfldb.Enums.season_phase`.
         """
 
     __pdoc__['Game.home_team'] = 'The team abbreviation for the home team.'
@@ -72,4 +72,4 @@ class Game (object):
     __pdoc__['Game.away_turnovers'] = 'Total turnovers for the away team.'
 
     def __init__(self):
-        pass
+        self.day_of_week = 'Sun'
