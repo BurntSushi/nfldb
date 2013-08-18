@@ -3,7 +3,10 @@ import os.path as path
 import re
 import sys
 
+import enum
+
 import psycopg2
+from psycopg2.extensions import AsIs, ISQLQuote
 from psycopg2.extras import NamedTupleCursor
 
 import toml
@@ -12,7 +15,7 @@ import nflgame
 
 __pdoc__ = {}
 
-api_version = 1
+api_version = 2
 __pdoc__['api_version'] = \
     """
     The schema version that this library corresponds to. When the schema
@@ -20,6 +23,17 @@ __pdoc__['api_version'] = \
     automatically update the schema to the latest version before doing
     anything else.
     """
+
+
+class _Enum (enum.Enum):
+    """
+    Conforms to the `getquoted` interface in psycopg2.
+    This maps enum types to SQL.
+    """
+    def __conform__(self, proto):
+        if proto is ISQLQuote:
+            return AsIs("'%s'" % self.name)
+        return None
 
 
 class Enums (object):
@@ -30,18 +44,45 @@ class Enums (object):
     database.
     """
 
-    game_phase = ['PREGAME', '1', '2', 'HALF-TIME',
-                  '3', '4', 'OVERTIME', 'FINAL']
+    game_phase = _Enum('game_phase',
+                       ['PREGAME', 'Q1', 'Q2', 'HALF',
+                        'Q3', 'Q4', 'OVERTIME', 'FINAL'])
+    """
+    Represents the phase of the game. e.g., `Q1` or `HALF`.
+    """
 
-    season_phase = ['Preseason', 'Regular season', 'Postseason']
+    season_phase = _Enum('season_phase',
+                         ['Preseason', 'Regular', 'Postseason'])
+    """
+    Represents one of the three phases of an NFL season: `Preseason`,
+    `Regular` or `Postseason`.
+    """
 
-    gameday = ['Sunday', 'Monday', 'Thursday', 'Friday', 'Saturday']
+    gameday = _Enum('gameday',
+                    ['Sunday', 'Monday', 'Thursday', 'Friday', 'Saturday'])
+    """
+    The day of the week on which a game was played. This list excludes
+    Tuesday and Wednesday and assumes that the start of the week is
+    `Sunday`.
+    """
 
-    playerpos = ['C', 'CB', 'DB', 'DE', 'DL', 'DT', 'FB', 'FS', 'G', 'ILB',
-                 'K', 'LB', 'LS', 'MLB', 'NT', 'OG', 'OL', 'OLB', 'OT', 'P',
-                 'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR']
+    playerpos = _Enum('playerpos',
+                      ['C', 'CB', 'DB', 'DE', 'DL', 'DT', 'FB', 'FS', 'G',
+                       'ILB', 'K', 'LB', 'LS', 'MLB', 'NT', 'OG', 'OL', 'OLB',
+                       'OT', 'P', 'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR'])
+    """
+    The set of all possible player positions in abbreviated form.
+    """
 
-    category_scope = ['play', 'player']
+    category_scope = _Enum('category_scope', ['play', 'player'])
+    """
+    The scope of a particular statistic. Typically, statistics refer
+    to a specific `player`, but sometimes a statistic refers to the
+    totality of a play. For example, `third_down_att` is a `play`
+    statistic that records third down attempts.
+
+    Currently, `play` and `player` are the only possible values.
+    """
 
 
 def connect(database=None, user=None, password=None, host=None, port=None,
@@ -232,19 +273,19 @@ def _migrate_2(c):
     # Create some types and common constraints.
     c.execute('''
         CREATE TYPE game_phase AS ENUM %s
-    ''' % _mogrify(c, enums['game_phase']))
+    ''' % _mogrify(c, Enums.game_phase))
     c.execute('''
         CREATE TYPE season_phase AS ENUM %s
-    ''' % _mogrify(c, enums['season_phase']))
+    ''' % _mogrify(c, Enums.season_phase))
     c.execute('''
         CREATE TYPE gameday AS ENUM %s
-    ''' % _mogrify(c, enums['gameday']))
+    ''' % _mogrify(c, Enums.gameday))
     c.execute('''
         CREATE TYPE playerpos AS ENUM %s
-    ''' % _mogrify(c, enums['playerpos']))
+    ''' % _mogrify(c, Enums.playerpos))
     c.execute('''
         CREATE TYPE category_scope AS ENUM %s
-    ''' % _mogrify(c, enums['category_scope']))
+    ''' % _mogrify(c, Enums.category_scope))
     c.execute('''
         CREATE DOMAIN gameid AS character varying (10)
                           CHECK (char_length(VALUE) = 10)
