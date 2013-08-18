@@ -39,6 +39,6 @@ setup(
     data_files=[('share/doc/nfldb', ['README.md', 'longdesc.rst',
                                      'COPYING', 'INSTALL']),
                 ('share/doc/nfldb/doc', glob('doc/nfldb/*.html'))],
-    install_requires=['nflgame', 'toml', 'psycopg2'],
+    install_requires=['nflgame', 'toml', 'psycopg2', 'enum34'],
     scripts=[]
 )
