@@ -3,10 +3,7 @@ import os.path as path
 import re
 import sys
 
-import enum
-
 import psycopg2
-from psycopg2.extensions import AsIs, ISQLQuote
 from psycopg2.extras import NamedTupleCursor
 
 import toml
@@ -22,66 +19,6 @@ __pdoc__['api_version'] = \
     version of the database is less than this value, `nfldb.connect` will
     automatically update the schema to the latest version before doing
     anything else.
-    """
-
-
-class _Enum (enum.Enum):
-    """
-    Conforms to the `getquoted` interface in psycopg2.
-    This maps enum types to SQL.
-    """
-    def __conform__(self, proto):
-        if proto is ISQLQuote:
-            return AsIs("'%s'" % self.name)
-        return None
-
-
-class Enums (object):
-    """
-    Enums groups all enum types used in the database schema.
-    All possible values for each enum type are represented as lists.
-    The ordering of each list is the same as the ordering in the
-    database.
-    """
-
-    game_phase = _Enum('game_phase',
-                       ['PREGAME', 'Q1', 'Q2', 'HALF',
-                        'Q3', 'Q4', 'OVERTIME', 'FINAL'])
-    """
-    Represents the phase of the game. e.g., `Q1` or `HALF`.
-    """
-
-    season_phase = _Enum('season_phase',
-                         ['Preseason', 'Regular', 'Postseason'])
-    """
-    Represents one of the three phases of an NFL season: `Preseason`,
-    `Regular` or `Postseason`.
-    """
-
-    gameday = _Enum('gameday',
-                    ['Sunday', 'Monday', 'Thursday', 'Friday', 'Saturday'])
-    """
-    The day of the week on which a game was played. This list excludes
-    Tuesday and Wednesday and assumes that the start of the week is
-    `Sunday`.
-    """
-
-    playerpos = _Enum('playerpos',
-                      ['C', 'CB', 'DB', 'DE', 'DL', 'DT', 'FB', 'FS', 'G',
-                       'ILB', 'K', 'LB', 'LS', 'MLB', 'NT', 'OG', 'OL', 'OLB',
-                       'OT', 'P', 'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR'])
-    """
-    The set of all possible player positions in abbreviated form.
-    """
-
-    category_scope = _Enum('category_scope', ['play', 'player'])
-    """
-    The scope of a particular statistic. Typically, statistics refer
-    to a specific `player`, but sometimes a statistic refers to the
-    totality of a play. For example, `third_down_att` is a `play`
-    statistic that records third down attempts.
-
-    Currently, `play` and `player` are the only possible values.
     """
 
 
@@ -270,22 +207,9 @@ def _migrate_1(c):
 
 
 def _migrate_2(c):
+    from nfldb.types import Enums
+
     # Create some types and common constraints.
-    c.execute('''
-        CREATE TYPE game_phase AS ENUM %s
-    ''' % _mogrify(c, Enums.game_phase))
-    c.execute('''
-        CREATE TYPE season_phase AS ENUM %s
-    ''' % _mogrify(c, Enums.season_phase))
-    c.execute('''
-        CREATE TYPE gameday AS ENUM %s
-    ''' % _mogrify(c, Enums.gameday))
-    c.execute('''
-        CREATE TYPE playerpos AS ENUM %s
-    ''' % _mogrify(c, Enums.playerpos))
-    c.execute('''
-        CREATE TYPE category_scope AS ENUM %s
-    ''' % _mogrify(c, Enums.category_scope))
     c.execute('''
         CREATE DOMAIN gameid AS character varying (10)
                           CHECK (char_length(VALUE) = 10)
@@ -295,12 +219,33 @@ def _migrate_2(c):
                           CHECK (VALUE >= 0)
     ''')
     c.execute('''
-        CREATE DOMAIN gameclock AS smallint
+        CREATE DOMAIN game_clock AS smallint
                           CHECK (VALUE >= 0 AND VALUE <= 900)
     ''')
     c.execute('''
         CREATE DOMAIN fieldpos AS smallint
                           CHECK (VALUE >= -50 AND VALUE <= 50)
+    ''')
+    c.execute('''
+        CREATE TYPE game_phase AS ENUM %s
+    ''' % _mogrify(c, Enums.game_phase))
+    c.execute('''
+        CREATE TYPE season_phase AS ENUM %s
+    ''' % _mogrify(c, Enums.season_phase))
+    c.execute('''
+        CREATE TYPE game_day AS ENUM %s
+    ''' % _mogrify(c, Enums.game_day))
+    c.execute('''
+        CREATE TYPE playerpos AS ENUM %s
+    ''' % _mogrify(c, Enums.playerpos))
+    c.execute('''
+        CREATE TYPE category_scope AS ENUM %s
+    ''' % _mogrify(c, Enums.category_scope))
+    c.execute('''
+        CREATE TYPE game_time AS (
+            phase game_phase,
+            elapsed game_clock
+        )
     ''')
 
     # Create the team table and populate it.
@@ -359,7 +304,7 @@ def _migrate_2(c):
                 CHECK (EXTRACT(TIMEZONE FROM start_time) = '0'),
             week usmallint NOT NULL
                 CHECK (week >= 1 AND week <= 25),
-            day_of_week gameday NOT NULL,
+            day_of_week game_day NOT NULL,
             season_year usmallint NOT NULL
                 CHECK (season_year >= 1960 AND season_year <= 2100),
             season_type season_phase NOT NULL,
@@ -396,10 +341,9 @@ def _migrate_2(c):
             drive_id usmallint NOT NULL,
             start_field fieldpos NOT NULL,
             start_quarter game_phase NOT NULL,
-            start_clock gameclock NOT NULL,
+            start_time game_time NOT NULL,
             end_field fieldpos NOT NULL,
-            end_quarter game_phase NOT NULL,
-            end_clock gameclock NOT NULL,
+            end_time game_time NOT NULL,
             pos_team character varying (3) NOT NULL,
             pos_time usmallint NOT NULL,
             redzone boolean NOT NULL,
@@ -423,8 +367,7 @@ def _migrate_2(c):
             gsis_id gameid NOT NULL,
             drive_id usmallint NOT NULL,
             play_id usmallint NOT NULL,
-            quarter game_phase NOT NULL,
-            clock gameclock NOT NULL,
+            time game_time NOT NULL,
             pos_team character varying (3) NOT NULL,
             yardline fieldpos NULL,
             down smallint NULL
@@ -497,9 +440,9 @@ def _migrate_2(c):
         CREATE INDEX drive_in_start_field ON drive (start_field ASC);
         CREATE INDEX drive_in_end_field ON drive (end_field ASC);
         CREATE INDEX drive_in_start_time ON drive
-            (start_quarter ASC, start_clock DESC);
+            (((start_time).phase) ASC, ((start_time).elapsed) ASC);
         CREATE INDEX drive_in_end_time ON drive
-            (end_quarter ASC, end_clock DESC);
+            (((end_time).phase) ASC, ((end_time).elapsed) ASC);
         CREATE INDEX drive_in_pos_team ON drive (pos_team ASC);
         CREATE INDEX drive_in_pos_time ON drive (pos_time DESC);
         CREATE INDEX drive_in_redzone ON drive (redzone);
@@ -511,7 +454,8 @@ def _migrate_2(c):
     c.execute('''
         CREATE INDEX play_in_gsis_id ON play (gsis_id ASC);
         CREATE INDEX play_in_drive_id ON play (drive_id ASC);
-        CREATE INDEX play_in_time ON play (quarter ASC, clock DESC);
+        CREATE INDEX play_in_time ON play
+            (((time).phase) ASC, ((time).elapsed) ASC);
         CREATE INDEX play_in_yardline ON play (yardline ASC);
         CREATE INDEX play_in_down ON play (down ASC);
         CREATE INDEX play_in_yards_to_go ON play (yards_to_go DESC);
