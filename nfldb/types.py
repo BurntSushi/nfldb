@@ -4,6 +4,7 @@ import datetime
 
 import enum
 
+import psycopg2
 from psycopg2.extensions import AsIs, ISQLQuote
 
 import pytz
@@ -32,8 +33,8 @@ def _nflgame_clock(clock):
     Given a `nflgame.game.GameClock` object, convert and return it as
     a `nfldb.Clock` object.
     """
-    phase = Enums._nflgame_game_phase[clock.qtr]
-    elapsed = Enums.__phase_max - ((clock._minutes * 60) + clock._seconds)
+    phase = Enums._nflgame_game_phase[clock.quarter]
+    elapsed = Clock._phase_max - ((clock._minutes * 60) + clock._seconds)
     return Clock(phase, elapsed)
 
 
@@ -71,11 +72,11 @@ class Enums (object):
     """
 
     game_day = _Enum('game_day',
-                     ['Sunday', 'Monday', 'Thursday', 'Friday', 'Saturday'])
+                     ['Sunday', 'Monday', 'Tuesday', 'Wednesday',
+                      'Thursday', 'Friday', 'Saturday'])
     """
-    The day of the week on which a game was played. This list excludes
-    Tuesday and Wednesday and assumes that the start of the week is
-    `Sunday`.
+    The day of the week on which a game was played. The week starts
+    on `Sunday`.
     """
 
     playerpos = _Enum('playerpos',
@@ -112,9 +113,10 @@ class Enums (object):
         'final': game_phase.Final,
         1: game_phase.Q1,
         2: game_phase.Q2,
-        3: game_phase.Q3,
-        4: game_phase.Q4,
-        5: game_phase.OT,
+        3: game_phase.Half,
+        4: game_phase.Q3,
+        5: game_phase.Q4,
+        6: game_phase.OT,
     }
     """
     Maps a game phase in `nflgame` to a `nfldb.Enums.game_phase`.
@@ -123,6 +125,8 @@ class Enums (object):
     _nflgame_game_day = {
         'Sun': game_day.Sunday,
         'Mon': game_day.Monday,
+        'Tue': game_day.Tuesday,
+        'Wed': game_day.Wednesday,
         'Thu': game_day.Thursday,
         'Fri': game_day.Friday,
         'Sat': game_day.Saturday,
@@ -183,6 +187,9 @@ class FieldPosition (object):
         Makes a new `nfldb.FieldPosition` given a field `offset`.
         `offset` must be in the integer range [-50, 50].
         """
+        if offset is None:
+            self.__offset = None
+            return
         assert -50 <= offset <= 50
         self.__offset = offset
 
@@ -191,17 +198,32 @@ class FieldPosition (object):
         Returns a new `nfldb.FieldPosition` with `yards` added to this
         field position. The value of `yards` may be negative.
         """
+        assert self.valid
         newoffset = max(-50, min(50, self.__offset + yards))
         return FieldPosition(newoffset)
 
+    @property
+    def valid(self):
+        """
+        Returns `True` if and only if this field position is known and
+        valid.
+
+        Invalid field positions cannot be compared with other field
+        positions.
+        """
+        return self.__offset is not None
+
     def __lt__(self, other):
+        assert self.valid and other.valid
         return self.__offset < other.__offset
 
     def __eq__(self, other):
         return self.__offset == other.__offset
 
     def __str__(self):
-        if self.offset > 0:
+        if not self.valid:
+            return 'N/A'
+        elif self.offset > 0:
             return 'OPP %d' % (50 - self.offset)
         elif self.offset < 0:
             return 'OWN %d' % (50 + self.offset)
@@ -210,7 +232,10 @@ class FieldPosition (object):
 
     def __conform__(self, proto):
         if proto is ISQLQuote:
-            return AsIs("%d" % self.__offset)
+            if not self.valid:
+                return AsIs("NULL")
+            else:
+                return AsIs("%d" % self.__offset)
         return None
 
 
@@ -238,11 +263,22 @@ class PossessionTime (object):
         self.__seconds = seconds
 
     @property
+    def valid(self):
+        """
+        Returns `True` if and only if this possession time has a valid
+        representation.
+
+        Invalid possession times cannot be compared with other
+        possession times.
+        """
+        return self.__seconds is not None
+
+    @property
     def total_seconds(self):
         """
         Returns the total seconds elapsed for this possession.
         """
-        return self.__seconds
+        return self.__seconds if self.valid else 0
 
     @property
     def minutes(self):
@@ -251,7 +287,7 @@ class PossessionTime (object):
         e.g., `0:59` would be `0` minutes and `4:01` would be `4`
         minutes.
         """
-        return self.__seconds // 60
+        return (self.__seconds // 60) if self.valid else 0
 
     @property
     def seconds(self):
@@ -260,12 +296,16 @@ class PossessionTime (object):
         e.g., `0:59` would be `59` seconds and `4:01` would be `1`
         second.
         """
-        return self.__seconds % 60
+        return (self.__seconds % 60) if self.valid else 0
 
     def __str__(self):
-        return '%d:%d' % (self.minutes, self.seconds)
+        if not self.valid:
+            return 'N/A'
+        else:
+            return '%d:%d' % (self.minutes, self.seconds)
 
     def __lt__(self, other):
+        assert self.valid and other.valid
         return self.__seconds < other.__seconds
 
     def __eq__(self, other):
@@ -273,7 +313,10 @@ class PossessionTime (object):
 
     def __conform__(self, proto):
         if proto is ISQLQuote:
-            return AsIs("%d" % self.__seconds)
+            if not self.valid:
+                return AsIs("NULL")
+            else:
+                return AsIs("%d" % self.__seconds)
         return None
 
 
@@ -295,7 +338,7 @@ class Clock (object):
     The phases of the game that do not have a time component.
     """
 
-    __phase_max = 900
+    _phase_max = 900
     """
     The maximum number of seconds in a game phase.
     """
@@ -314,7 +357,7 @@ class Clock (object):
         to the clock time `15:00`.
         """
         assert isinstance(game_phase, Enums.game_phase)
-        assert 0 <= elapsed <= Clock.__phase_max
+        assert 0 <= elapsed <= Clock._phase_max
 
         if game_phase in Clock.__nonqs:
             elapsed = 0
@@ -338,7 +381,7 @@ class Clock (object):
         minutes **left in this phase** is returned. Otherwise, `0` is
         returned.
         """
-        return (Clock.__phase_max - self.elapsed) // 60
+        return (Clock._phase_max - self.elapsed) // 60
 
     @property
     def seconds(self):
@@ -346,7 +389,7 @@ class Clock (object):
         If the clock has a time component, then the number of seconds
         **left in this phase** is returned. Otherwise, `0` is returned.
         """
-        return (Clock.__phase_max - self.elapsed) % 60
+        return (Clock._phase_max - self.elapsed) % 60
 
     def __str__(self):
         phase = self.game_phase
@@ -363,7 +406,7 @@ class Clock (object):
 
     def __conform__(self, proto):
         if proto is ISQLQuote:
-            return AsIs("ROW(%s, %d)"
+            return AsIs("ROW('%s', %d)::game_time"
                         % (self.game_phase.name, self.elapsed))
         return None
 
@@ -380,7 +423,7 @@ class Drive (object):
         automatically by `nfldb.Game.from_nflgame`.
         """
         start_time = _nflgame_clock(drive.time_start)
-        start_field = FieldPosition(drive.field_start.offset)
+        start_field = FieldPosition(getattr(drive.field_start, 'offset', None))
         end_field = FieldPosition(drive.field_end.offset)
         end_time = _nflgame_clock(drive.time_end)
         return Drive(g, drive.drive_num, start_field, start_time,
@@ -454,6 +497,24 @@ class Drive (object):
         The total number of plays executed by the offense in this
         drive.
         """
+
+    def _save(self, cursor):
+        vals = [
+            ('gsis_id', self.game.gsis_id),
+            ('drive_id', self.drive_id),
+            ('start_field', self.start_field),
+            ('start_time', self.start_time),
+            ('end_field', self.end_field),
+            ('end_time', self.end_time),
+            ('pos_team', self.pos_team),
+            ('pos_time', self.pos_time),
+            ('first_downs', self.first_downs),
+            ('result', self.result),
+            ('penalty_yards', self.penalty_yards),
+            ('yards_gained', self.yards_gained),
+            ('play_count', self.play_count),
+        ]
+        _upsert(cursor, 'drive', vals, vals[0:2])
 
 
 class Game (object):
@@ -589,3 +650,55 @@ class Game (object):
         """The OT quarter score for the away team."""
         self.away_turnovers = away_turnovers
         """Total turnovers for the away team."""
+
+    def _save(self, cursor):
+        vals = [
+            ('gsis_id', self.gsis_id),
+            ('gamekey', self.gamekey),
+            ('start_time', self.start_time),
+            ('week', self.week),
+            ('day_of_week', self.day_of_week),
+            ('season_year', self.season_year),
+            ('season_type', self.season_type),
+            ('home_team', self.home_team),
+            ('home_score', self.home_score),
+            ('home_score_q1', self.home_score_q1),
+            ('home_score_q2', self.home_score_q2),
+            ('home_score_q3', self.home_score_q3),
+            ('home_score_q4', self.home_score_q4),
+            ('home_score_q5', self.home_score_q5),
+            ('home_turnovers', self.home_turnovers),
+            ('away_team', self.away_team),
+            ('away_score', self.away_score),
+            ('away_score_q1', self.away_score_q1),
+            ('away_score_q2', self.away_score_q2),
+            ('away_score_q3', self.away_score_q3),
+            ('away_score_q4', self.away_score_q4),
+            ('away_score_q5', self.away_score_q5),
+            ('away_turnovers', self.away_turnovers),
+        ]
+        _upsert(cursor, 'game', vals, [vals[0]])
+        for drive in self.__drives:
+            drive._save(cursor)
+
+
+def _upsert(cursor, table, data, pk):
+    update_set = ', '.join(['%s = %s' % (k, '%s') for k, _ in data])
+    insert_fields = ', '.join([k for k, _ in data])
+    insert_places = ', '.join(['%s' for _ in data])
+    pk_cond = ' AND '.join(['%s = %s' % (k, '%s') for k, _ in pk])
+    q = '''
+        UPDATE %s SET %s WHERE %s;
+    ''' % (table, update_set, pk_cond)
+    q += '''
+        INSERT INTO %s (%s)
+        SELECT %s WHERE NOT EXISTS (SELECT 1 FROM %s WHERE %s)
+    ''' % (table, insert_fields, insert_places, table, pk_cond)
+
+    values = [v for _, v in data]
+    pk_values = [v for _, v in pk]
+    try:
+        cursor.execute(q, values + pk_values + values + pk_values)
+    except psycopg2.ProgrammingError as e:
+        print(cursor.query)
+        raise e

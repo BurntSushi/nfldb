@@ -2,5 +2,27 @@
 
 import nfldb
 
-conn = nfldb.connect()
-print nfldb.schema_version(conn)
+import nflgame
+
+db = nfldb.connect()
+games = [nfldb.Game.from_nflgame(db, g) for g in nflgame.games(2012)]
+
+# We always insert dates and times as UTC.
+nfldb.set_timezone(db, 'UTC')
+
+with nfldb.Tx(db) as cursor:
+    # Lock all tables that the update script writes to. This is a hammer
+    # meant to prevent race conditions if someone else is trying to update
+    # the database at the same time.
+    #
+    # The lock used is a write lock; so other clients can still read from
+    # the tables during an update.
+    cursor.execute('''
+        LOCK TABLE player IN SHARE ROW EXCLUSIVE MODE;
+        LOCK TABLE game IN SHARE ROW EXCLUSIVE MODE;
+        LOCK TABLE drive IN SHARE ROW EXCLUSIVE MODE;
+        LOCK TABLE play IN SHARE ROW EXCLUSIVE MODE;
+        LOCK TABLE stat IN SHARE ROW EXCLUSIVE MODE
+    ''')
+    for game in games:
+        game._save(cursor)

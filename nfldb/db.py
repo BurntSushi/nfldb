@@ -339,17 +339,15 @@ def _migrate_2(c):
         CREATE TABLE drive (
             gsis_id gameid NOT NULL,
             drive_id usmallint NOT NULL,
-            start_field fieldpos NOT NULL,
-            start_quarter game_phase NOT NULL,
+            start_field fieldpos NULL,
             start_time game_time NOT NULL,
-            end_field fieldpos NOT NULL,
+            end_field fieldpos NULL,
             end_time game_time NOT NULL,
             pos_team character varying (3) NOT NULL,
-            pos_time usmallint NOT NULL,
-            redzone boolean NOT NULL,
+            pos_time usmallint NULL,
             first_downs usmallint NOT NULL,
             result text NULL,
-            penalty_yards usmallint NOT NULL,
+            penalty_yards smallint NOT NULL,
             yards_gained smallint NOT NULL,
             play_count usmallint NOT NULL,
             PRIMARY KEY (gsis_id, drive_id),
@@ -445,7 +443,6 @@ def _migrate_2(c):
             (((end_time).phase) ASC, ((end_time).elapsed) ASC);
         CREATE INDEX drive_in_pos_team ON drive (pos_team ASC);
         CREATE INDEX drive_in_pos_time ON drive (pos_time DESC);
-        CREATE INDEX drive_in_redzone ON drive (redzone);
         CREATE INDEX drive_in_first_downs ON drive (first_downs DESC);
         CREATE INDEX drive_in_penalty_yards ON drive (penalty_yards DESC);
         CREATE INDEX drive_in_yards_gained ON drive (yards_gained DESC);
