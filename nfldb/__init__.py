@@ -7,6 +7,7 @@ from nfldb.db import __pdoc__ as __db_pdoc__
 from nfldb.db import api_version, connect, set_timezone, schema_version
 from nfldb.db import Tx
 from nfldb.types import __pdoc__ as __types_pdoc__
+from nfldb.types import stat_categories
 from nfldb.types import Clock, Enums, Drive, FieldPosition, Game
 from nfldb.types import PossessionTime, Team
 from nfldb.version import __version__
@@ -22,6 +23,7 @@ __all__ = [
     'Tx',
 
     # nfldb.types
+    'stat_categories',
     'Clock', 'Enums', 'Drive', 'FieldPosition', 'Game',
     'PossessionTime', 'Team',
 

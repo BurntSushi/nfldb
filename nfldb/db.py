@@ -4,7 +4,9 @@ import re
 import sys
 
 import psycopg2
-from psycopg2.extras import NamedTupleCursor
+from psycopg2.extras import RealDictCursor
+from psycopg2.extensions import TRANSACTION_STATUS_INTRANS
+from psycopg2.extensions import new_type, register_type
 
 import toml
 
@@ -60,7 +62,7 @@ def connect(database=None, user=None, password=None, host=None, port=None,
         timezone = conf.get('timezone', 'US/Eastern')
     conn = psycopg2.connect(database=database, user=user, password=password,
                             host=host, port=port,
-                            cursor_factory=NamedTupleCursor)
+                            cursor_factory=RealDictCursor)
     set_timezone(conn, timezone)
 
     # Start the migration. Make sure if this is the initial setup that
@@ -72,6 +74,14 @@ def connect(database=None, user=None, password=None, host=None, port=None,
     assert sversion > 0 or (sversion == 0 and _is_empty(conn)), \
         'Schema has version 0 but is not empty.'
     _migrate(conn, api_version)
+
+    # Bind SQL -> Python casting functions.
+    from nfldb.types import _Enum, Enums
+    _bind_type(conn, 'game_phase', _Enum._pg_cast(Enums.game_phase))
+    _bind_type(conn, 'season_phase', _Enum._pg_cast(Enums.season_phase))
+    _bind_type(conn, 'game_day', _Enum._pg_cast(Enums.game_day))
+    _bind_type(conn, 'playerpos', _Enum._pg_cast(Enums.playerpos))
+    _bind_type(conn, 'category_scope', _Enum._pg_cast(Enums.category_scope))
 
     return conn
 
@@ -89,7 +99,7 @@ def schema_version(conn):
             return 0
         if c.rowcount == 0:
             return 0
-        return int(c.fetchone().value)
+        return int(c.fetchone()['value'])
 
 
 def set_timezone(conn, timezone):
@@ -104,6 +114,21 @@ def set_timezone(conn, timezone):
     """
     with Tx(conn) as c:
         c.execute('SET timezone = %s', (timezone,))
+
+
+def _bind_type(conn, sql_type_name, cast):
+    """
+    Binds a `cast` function to the SQL type in the connection `conn`
+    given by `sql_type_name`. `cast` must be a function with two
+    parameters: the SQL value and a cursor object. It should return the
+    appropriate Python object.
+
+    Note that `sql_type_name` is not escaped.
+    """
+    with Tx(conn) as c:
+        c.execute('SELECT NULL::%s' % sql_type_name)
+        typ = new_type((c.description[0].type_code,), sql_type_name, cast)
+        register_type(typ)
 
 
 def _db_name(conn):
@@ -121,7 +146,7 @@ def _is_empty(conn):
             SELECT COUNT(*) AS count FROM information_schema.tables
             WHERE table_catalog = %s AND table_schema = 'public'
         ''', [_db_name(conn)])
-        if c.fetchone().count == 0:
+        if c.fetchone()['count'] == 0:
             return True
     return False
 
@@ -138,13 +163,18 @@ class Tx (object):
     rollback is automatically called. Otherwise, upon exit of the with
     block, commit is called.
 
+    Tx blocks can be nested inside other Tx blocks. Nested Tx blocks
+    never commit or rollback a transaction. Instead, the exception is
+    passed along to the caller. Only the outermost transaction will
+    commit or rollback the entire transaction.
+
     Use it like so:
 
         #!python
         with Tx(conn) as cursor:
             ...
 
-    Which is meant to be equivalent to the following:
+    Which is meant to be roughly equivalent to the following:
 
         #!python
         with conn:
@@ -152,6 +182,8 @@ class Tx (object):
                 ...
     """
     def __init__(self, psycho_conn):
+        tstatus = psycho_conn.get_transaction_status()
+        self.__nested = tstatus == TRANSACTION_STATUS_INTRANS
         self.__conn = psycho_conn
         self.__cursor = None
 
@@ -163,10 +195,12 @@ class Tx (object):
         if not self.__cursor.closed:
             self.__cursor.close()
         if typ is not None:
-            self.__conn.rollback()
+            if not self.__nested:
+                self.__conn.rollback()
             return False
         else:
-            self.__conn.commit()
+            if not self.__nested:
+                self.__conn.commit()
             return True
 
 
@@ -207,7 +241,7 @@ def _migrate_1(c):
 
 
 def _migrate_2(c):
-    from nfldb.types import Enums
+    from nfldb.types import _Enum, Enums, stat_categories
 
     # Create some types and common constraints.
     c.execute('''
@@ -248,6 +282,10 @@ def _migrate_2(c):
         )
     ''')
 
+    # Bind some of the types to Python objects.
+    _bind_type(c.connection, 'category_scope',
+               _Enum._pg_cast(Enums.category_scope))
+
     # Create the team table and populate it.
     c.execute('''
         CREATE TABLE team (
@@ -267,17 +305,22 @@ def _migrate_2(c):
             category_id character varying (50) NOT NULL,
             gsis_number usmallint NOT NULL,
             category_type category_scope NOT NULL,
+            is_real boolean NOT NULL,
             description text,
             PRIMARY KEY (category_id)
         )
     ''')
     with open(path.join(path.split(__file__)[0], 'data-dictionary.csv')) as f:
+        rows = []
+        for row in csv.DictReader(f, delimiter='\t'):
+            rows.append((int(row['gsis_number']), bool(int(row['is_real'])),
+                         row['category_type'], row['category_id'],
+                         row['description']))
         c.execute('''
             INSERT INTO category
-                (gsis_number, category_type, category_id, description)
+                (gsis_number, is_real, category_type, category_id, description)
             VALUES %s
-        ''' % (', '.join(_mogrify(c, row)
-               for row in csv.reader(f, delimiter='\t'))))
+        ''' % (', '.join(_mogrify(c, row) for row in rows)))
 
     # Create the rest of the schema.
     c.execute('''
@@ -360,6 +403,16 @@ def _migrate_2(c):
                 ON UPDATE CASCADE
         )
     ''')
+
+    # I've taken the approach of using a sparse table to represent
+    # sparse play statistic data. See issue #2:
+    # https://github.com/BurntSushi/nfldb/issues/2
+    cats = stat_categories(c.connection)
+    play_cats = [cat for cat in cats.values()
+                 if cat.category_type is Enums.category_scope.play]
+    player_cats = [cat for cat in cats.values()
+                   if cat.category_type is Enums.category_scope.player]
+
     c.execute('''
         CREATE TABLE play (
             gsis_id gameid NOT NULL,
@@ -374,6 +427,7 @@ def _migrate_2(c):
                 CHECK (yards_to_go >= 0 AND yards_to_go <= 100),
             description text NULL,
             note text NULL,
+            %s,
             PRIMARY KEY (gsis_id, drive_id, play_id),
             FOREIGN KEY (gsis_id, drive_id)
                 REFERENCES drive (gsis_id, drive_id)
@@ -386,7 +440,8 @@ def _migrate_2(c):
                 ON DELETE RESTRICT
                 ON UPDATE CASCADE
         )
-    ''')
+    ''' % ', '.join([cat._sql_field for cat in play_cats]))
+
     c.execute('''
         CREATE TABLE stat (
             gsis_id gameid NOT NULL,

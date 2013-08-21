@@ -1,11 +1,13 @@
 #!/usr/bin/env python2.7
 
+from __future__ import absolute_import, division, print_function
+
 import nfldb
 
 import nflgame
 
 db = nfldb.connect()
-games = [nfldb.Game.from_nflgame(db, g) for g in nflgame.games(2012)]
+games = [nfldb.Game.from_nflgame(db, g) for g in nflgame.games(2012, 1)]
 
 # We always insert dates and times as UTC.
 nfldb.set_timezone(db, 'UTC')

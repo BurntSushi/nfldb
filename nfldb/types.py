@@ -1,5 +1,9 @@
 from __future__ import absolute_import, division, print_function
 
+try:
+    from collections import OrderedDict
+except ImportError:
+    from ordereddict import OrderedDict
 import datetime
 
 import enum
@@ -11,7 +15,27 @@ import pytz
 
 import nflgame
 
+from nfldb.db import Tx
+
 __pdoc__ = {}
+
+
+def stat_categories(db):
+    """
+    Given a database object, returns a `collections.OrderedDict` of all
+    statistical categories available for play-by-play data.
+    """
+    cats = OrderedDict()
+    with Tx(db) as cursor:
+        cursor.execute('''
+            SELECT
+                category_id, gsis_number, category_type, is_real, description
+            FROM category
+            ORDER BY category_type ASC, category_id ASC
+        ''')
+        for row in cursor.fetchall():
+            cats[row['category_id']] = Category.from_row(row)
+    return cats
 
 
 def _nflgame_start_time(g):
@@ -47,6 +71,15 @@ class _Enum (enum.Enum):
         if proto is ISQLQuote:
             return AsIs("'%s'" % self.name)
         return None
+
+    @staticmethod
+    def _pg_cast(enum):
+        """
+        Returns a function to cast a SQL enum to the enumeration type
+        corresponding to `enum`. Namely, `enum` should be a member of
+        `nfldb.Enums`.
+        """
+        return lambda sqlv, _: enum[sqlv]
 
 
 class Enums (object):
@@ -166,6 +199,65 @@ class Team (object):
         if proto is ISQLQuote:
             return AsIs("'%s'" % self.team_id)
         return None
+
+
+class Category (object):
+    """
+    Represents meta data about a statistical category. This includes
+    the categorie's scope, GSIS identifier, name and short description.
+    """
+    __slots__ = ['category_id', 'gsis_number', 'category_type',
+                 'is_real', 'description']
+
+    @staticmethod
+    def from_row(row):
+        """
+        Introduces a `nfldb.Category` object from a row in the
+        `category` table.
+        """
+        return Category(row['category_id'], row['gsis_number'],
+                        row['category_type'], row['is_real'],
+                        row['description'])
+
+    def __init__(self, category_id, gsis_number, category_type,
+                 is_real, description):
+        self.category_id = category_id
+        """
+        A unique name for this category.
+        """
+        self.gsis_number = gsis_number
+        """
+        A unique numeric identifier for this category.
+        """
+        self.category_type = category_type
+        """
+        The scope of this category represented with
+        `nfldb.Enums.category_scope`.
+        """
+        self.is_real = is_real
+        """
+        Whether this statistic is a whole number of not. Currently,
+        only the `defense_sk` statistic has `Category.is_real` set to
+        `True`.
+        """
+        self.description = description
+        """
+        A free-form text description of this category.
+        """
+
+    @property
+    def _sql_field(self):
+        """
+        The SQL definition of this column.
+        """
+        typ = 'real' if self.is_real else 'smallint'
+        return '%s %s NULL' % (self.category_id, typ)
+
+    def __str__(self):
+        return self.category_id
+
+    def __eq__(self, other):
+        return self.category_id == other.category_id
 
 
 class FieldPosition (object):

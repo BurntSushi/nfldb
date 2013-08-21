@@ -3,6 +3,16 @@ from distutils.core import setup
 from glob import glob
 import os.path as path
 
+install_requires = ['nflgame', 'toml', 'psycopg2', 'enum34']
+try:
+    import argparse
+except ImportError:
+    install_requires.append('argparse')
+try:
+    from collections import OrderedDict
+except ImportError:
+    install_requires.append('ordereddict')
+
 cwd = path.dirname(__file__)
 longdesc = codecs.open(path.join(cwd, 'longdesc.rst'), 'r', 'utf-8').read()
 
@@ -39,6 +49,6 @@ setup(
     data_files=[('share/doc/nfldb', ['README.md', 'longdesc.rst',
                                      'COPYING', 'INSTALL']),
                 ('share/doc/nfldb/doc', glob('doc/nfldb/*.html'))],
-    install_requires=['nflgame', 'toml', 'psycopg2', 'enum34'],
+    install_requires=install_requires,
     scripts=[]
 )
