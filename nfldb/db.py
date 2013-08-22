@@ -193,6 +193,10 @@ class Tx (object):
         with conn:
             with conn.cursor() as curs:
                 ...
+
+    This should only be used when you're running SQL queries directly.
+    (Or when interfacing with another part of the API that requires
+    a database cursor.)
     """
     def __init__(self, psycho_conn):
         tstatus = psycho_conn.get_transaction_status()
