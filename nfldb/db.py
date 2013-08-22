@@ -1,5 +1,6 @@
-import csv
-import os.path as path
+from __future__ import absolute_import, division, print_function
+import datetime
+
 import re
 import sys
 
@@ -7,6 +8,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.extensions import TRANSACTION_STATUS_INTRANS
 from psycopg2.extensions import new_type, register_type
+
+import pytz
 
 import toml
 
@@ -76,12 +79,14 @@ def connect(database=None, user=None, password=None, host=None, port=None,
     _migrate(conn, api_version)
 
     # Bind SQL -> Python casting functions.
-    from nfldb.types import _Enum, Enums
+    from nfldb.types import Clock, _Enum, Enums, FieldPosition, PossessionTime
     _bind_type(conn, 'game_phase', _Enum._pg_cast(Enums.game_phase))
     _bind_type(conn, 'season_phase', _Enum._pg_cast(Enums.season_phase))
     _bind_type(conn, 'game_day', _Enum._pg_cast(Enums.game_day))
     _bind_type(conn, 'playerpos', _Enum._pg_cast(Enums.playerpos))
-    _bind_type(conn, 'category_scope', _Enum._pg_cast(Enums.category_scope))
+    _bind_type(conn, 'game_time', Clock._pg_cast)
+    _bind_type(conn, 'pos_period', PossessionTime._pg_cast)
+    _bind_type(conn, 'field_pos', FieldPosition._pg_cast)
 
     return conn
 
@@ -114,6 +119,14 @@ def set_timezone(conn, timezone):
     """
     with Tx(conn) as c:
         c.execute('SET timezone = %s', (timezone,))
+
+
+def now():
+    """
+    Returns the current date/time in UTC. It can be used to compare
+    against date/times in any of the `nfldb` objects.
+    """
+    return datetime.datetime.now(pytz.utc)
 
 
 def _bind_type(conn, sql_type_name, cast):
@@ -204,6 +217,85 @@ class Tx (object):
             return True
 
 
+def _big_insert(cursor, table, datas):
+    """
+    Given a database cursor, table name and a list of asssociation
+    lists of data (column name and value), perform a single large
+    insert. Namely, each association list should correspond to a single
+    row in `table`.
+
+    Each association list must have exactly the same number of columns
+    in exactly the same order.
+    """
+    stamped = table in ('game', 'drive', 'play')
+    insert_fields = [k for k, _ in datas[0]]
+    if stamped:
+        insert_fields.append('time_inserted')
+        insert_fields.append('time_updated')
+    insert_fields = ', '.join(insert_fields)
+
+    def times(xs):
+        if stamped:
+            xs.append('NOW()')
+            xs.append('NOW()')
+        return xs
+
+    def vals(xs):
+        return [v for _, v in xs]
+    values = ', '.join(_mogrify(cursor, times(vals(data))) for data in datas)
+
+    cursor.execute('''
+        INSERT INTO %s (%s) VALUES %s
+    ''' % (table, insert_fields, values))
+
+
+def _upsert(cursor, table, data, pk):
+    """
+    Performs an arbitrary "upsert" given a table, an association list
+    mapping key to value, and an association list representing the
+    primary key.
+
+    Note that this is **not** free of race conditions. It is the
+    caller's responsibility to avoid race conditions. (e.g., By using a
+    table or row lock.)
+
+    If the table is `game`, `drive` or `play`, then the `time_insert`
+    and `time_updated` fields are automatically populated.
+    """
+    stamped = table in ('game', 'drive', 'play')
+    update_set = ['%s = %s' % (k, '%s') for k, _ in data]
+    if stamped:
+        update_set.append('time_updated = NOW()')
+    update_set = ', '.join(update_set)
+
+    insert_fields = [k for k, _ in data]
+    insert_places = ['%s' for _ in data]
+    if stamped:
+        insert_fields.append('time_inserted')
+        insert_fields.append('time_updated')
+        insert_places.append('NOW()')
+        insert_places.append('NOW()')
+    insert_fields = ', '.join(insert_fields)
+    insert_places = ', '.join(insert_places)
+
+    pk_cond = ' AND '.join(['%s = %s' % (k, '%s') for k, _ in pk])
+    q = '''
+        UPDATE %s SET %s WHERE %s;
+    ''' % (table, update_set, pk_cond)
+    q += '''
+        INSERT INTO %s (%s)
+        SELECT %s WHERE NOT EXISTS (SELECT 1 FROM %s WHERE %s)
+    ''' % (table, insert_fields, insert_places, table, pk_cond)
+
+    values = [v for _, v in data]
+    pk_values = [v for _, v in pk]
+    try:
+        cursor.execute(q, values + pk_values + values + pk_values)
+    except psycopg2.ProgrammingError as e:
+        print(cursor.query)
+        raise e
+
+
 # What follows are the migration functions. They follow the naming
 # convention "_migrate_{VERSION}" where VERSION is an integer that
 # corresponds to the version that the schema will be after the
@@ -241,7 +333,7 @@ def _migrate_1(c):
 
 
 def _migrate_2(c):
-    from nfldb.types import _Enum, Enums, stat_categories
+    from nfldb.types import Enums, _play_categories, _player_categories
 
     # Create some types and common constraints.
     c.execute('''
@@ -257,8 +349,13 @@ def _migrate_2(c):
                           CHECK (VALUE >= 0 AND VALUE <= 900)
     ''')
     c.execute('''
-        CREATE DOMAIN fieldpos AS smallint
+        CREATE DOMAIN field_offset AS smallint
                           CHECK (VALUE >= -50 AND VALUE <= 50)
+    ''')
+
+    c.execute('''
+        CREATE DOMAIN utctime AS timestamp with time zone
+                          CHECK (EXTRACT(TIMEZONE FROM VALUE) = '0')
     ''')
     c.execute('''
         CREATE TYPE game_phase AS ENUM %s
@@ -273,18 +370,21 @@ def _migrate_2(c):
         CREATE TYPE playerpos AS ENUM %s
     ''' % _mogrify(c, Enums.playerpos))
     c.execute('''
-        CREATE TYPE category_scope AS ENUM %s
-    ''' % _mogrify(c, Enums.category_scope))
-    c.execute('''
         CREATE TYPE game_time AS (
             phase game_phase,
             elapsed game_clock
         )
     ''')
-
-    # Bind some of the types to Python objects.
-    _bind_type(c.connection, 'category_scope',
-               _Enum._pg_cast(Enums.category_scope))
+    c.execute('''
+        CREATE TYPE pos_period AS (
+            elapsed usmallint
+        )
+    ''')
+    c.execute('''
+        CREATE TYPE field_pos AS (
+            pos field_offset
+        )
+    ''')
 
     # Create the team table and populate it.
     c.execute('''
@@ -299,41 +399,17 @@ def _migrate_2(c):
         INSERT INTO team (team_id, city, name) VALUES %s
     ''' % (', '.join(_mogrify(c, team[0:3]) for team in nflgame.teams)))
 
-    # Create the stat category table and populate it.
-    c.execute('''
-        CREATE TABLE category (
-            category_id character varying (50) NOT NULL,
-            gsis_number usmallint NOT NULL,
-            category_type category_scope NOT NULL,
-            is_real boolean NOT NULL,
-            description text,
-            PRIMARY KEY (category_id)
-        )
-    ''')
-    with open(path.join(path.split(__file__)[0], 'data-dictionary.csv')) as f:
-        rows = []
-        for row in csv.DictReader(f, delimiter='\t'):
-            rows.append((int(row['gsis_number']), bool(int(row['is_real'])),
-                         row['category_type'], row['category_id'],
-                         row['description']))
-        c.execute('''
-            INSERT INTO category
-                (gsis_number, is_real, category_type, category_id, description)
-            VALUES %s
-        ''' % (', '.join(_mogrify(c, row) for row in rows)))
-
     # Create the rest of the schema.
     c.execute('''
         CREATE TABLE player (
-            player_id serial NOT NULL,
-            player_gsis_id character varying (10) NOT NULL
-                CHECK (char_length(player_gsis_id) = 10),
+            player_id character varying (10) NOT NULL
+                CHECK (char_length(player_id) = 10),
             gsis_name character varying (75) NOT NULL,
             full_name character varying (75) NULL,
-            current_team character varying (3) NOT NULL,
-            position playerpos NOT NULL,
+            last_team character varying (3) NOT NULL,
+            position playerpos NULL,
             PRIMARY KEY (player_id),
-            FOREIGN KEY (current_team)
+            FOREIGN KEY (last_team)
                 REFERENCES team (team_id)
                 ON DELETE RESTRICT
                 ON UPDATE CASCADE
@@ -343,14 +419,14 @@ def _migrate_2(c):
         CREATE TABLE game (
             gsis_id gameid NOT NULL,
             gamekey character varying (5) NULL,
-            start_time timestamp with time zone NOT NULL
-                CHECK (EXTRACT(TIMEZONE FROM start_time) = '0'),
+            start_time utctime NOT NULL,
             week usmallint NOT NULL
                 CHECK (week >= 1 AND week <= 25),
             day_of_week game_day NOT NULL,
             season_year usmallint NOT NULL
                 CHECK (season_year >= 1960 AND season_year <= 2100),
             season_type season_phase NOT NULL,
+            finished boolean NOT NULL,
             home_team character varying (3) NOT NULL,
             home_score usmallint NOT NULL,
             home_score_q1 usmallint NULL,
@@ -367,6 +443,8 @@ def _migrate_2(c):
             away_score_q4 usmallint NULL,
             away_score_q5 usmallint NULL,
             away_turnovers usmallint NOT NULL,
+            time_inserted utctime NOT NULL,
+            time_updated utctime NOT NULL,
             PRIMARY KEY (gsis_id),
             FOREIGN KEY (home_team)
                 REFERENCES team (team_id)
@@ -382,17 +460,19 @@ def _migrate_2(c):
         CREATE TABLE drive (
             gsis_id gameid NOT NULL,
             drive_id usmallint NOT NULL,
-            start_field fieldpos NULL,
+            start_field field_pos NULL,
             start_time game_time NOT NULL,
-            end_field fieldpos NULL,
+            end_field field_pos NULL,
             end_time game_time NOT NULL,
             pos_team character varying (3) NOT NULL,
-            pos_time usmallint NULL,
+            pos_time pos_period NULL,
             first_downs usmallint NOT NULL,
             result text NULL,
             penalty_yards smallint NOT NULL,
             yards_gained smallint NOT NULL,
             play_count usmallint NOT NULL,
+            time_inserted utctime NOT NULL,
+            time_updated utctime NOT NULL,
             PRIMARY KEY (gsis_id, drive_id),
             FOREIGN KEY (gsis_id)
                 REFERENCES game (gsis_id)
@@ -407,26 +487,22 @@ def _migrate_2(c):
     # I've taken the approach of using a sparse table to represent
     # sparse play statistic data. See issue #2:
     # https://github.com/BurntSushi/nfldb/issues/2
-    cats = stat_categories(c.connection)
-    play_cats = [cat for cat in cats.values()
-                 if cat.category_type is Enums.category_scope.play]
-    player_cats = [cat for cat in cats.values()
-                   if cat.category_type is Enums.category_scope.player]
-
     c.execute('''
         CREATE TABLE play (
             gsis_id gameid NOT NULL,
             drive_id usmallint NOT NULL,
             play_id usmallint NOT NULL,
             time game_time NOT NULL,
-            pos_team character varying (3) NOT NULL,
-            yardline fieldpos NULL,
+            pos_team character varying (3) NULL,
+            yardline field_pos NULL,
             down smallint NULL
                 CHECK (down >= 1 AND down <= 4),
             yards_to_go smallint NULL
                 CHECK (yards_to_go >= 0 AND yards_to_go <= 100),
             description text NULL,
             note text NULL,
+            time_inserted utctime NOT NULL,
+            time_updated utctime NOT NULL,
             %s,
             PRIMARY KEY (gsis_id, drive_id, play_id),
             FOREIGN KEY (gsis_id, drive_id)
@@ -440,17 +516,16 @@ def _migrate_2(c):
                 ON DELETE RESTRICT
                 ON UPDATE CASCADE
         )
-    ''' % ', '.join([cat._sql_field for cat in play_cats]))
+    ''' % ', '.join([cat._sql_field for cat in _play_categories.values()]))
 
     c.execute('''
-        CREATE TABLE stat (
+        CREATE TABLE play_player (
             gsis_id gameid NOT NULL,
             drive_id usmallint NOT NULL,
             play_id usmallint NOT NULL,
-            player_id integer NOT NULL,
-            category_id character varying (50) NOT NULL,
-            value real NOT NULL,
-            PRIMARY KEY (gsis_id, drive_id, play_id, player_id, category_id),
+            player_id character varying (10) NOT NULL,
+            %s,
+            PRIMARY KEY (gsis_id, drive_id, play_id, player_id),
             FOREIGN KEY (gsis_id, drive_id, play_id)
                 REFERENCES play (gsis_id, drive_id, play_id)
                 ON DELETE CASCADE,
@@ -462,24 +537,20 @@ def _migrate_2(c):
                 ON DELETE CASCADE,
             FOREIGN KEY (player_id)
                 REFERENCES player (player_id)
-                ON DELETE RESTRICT,
-            FOREIGN KEY (category_id)
-                REFERENCES category (category_id)
                 ON DELETE RESTRICT
-                ON UPDATE CASCADE
         )
-    ''')
+    ''' % ', '.join(cat._sql_field for cat in _player_categories.values()))
 
     # Now create all of the indexes.
     c.execute('''
-        CREATE INDEX player_in_player_gsis_id ON player (player_gsis_id ASC);
         CREATE INDEX player_in_gsis_name ON player (gsis_name ASC);
         CREATE INDEX player_in_full_name ON player (full_name ASC);
-        CREATE INDEX player_in_current_team ON player (current_team ASC);
+        CREATE INDEX player_in_last_team ON player (last_team ASC);
         CREATE INDEX player_in_position ON player (position ASC);
     ''')
     c.execute('''
         CREATE INDEX game_in_gamekey ON game (gamekey ASC);
+        CREATE INDEX game_in_finished ON game (finished ASC);
         CREATE INDEX game_in_home_team ON game (home_team ASC);
         CREATE INDEX game_in_away_team ON game (away_team ASC);
         CREATE INDEX game_in_home_score ON game (home_score ASC);
@@ -490,14 +561,17 @@ def _migrate_2(c):
     c.execute('''
         CREATE INDEX drive_in_gsis_id ON drive (gsis_id ASC);
         CREATE INDEX drive_in_drive_id ON drive (drive_id ASC);
-        CREATE INDEX drive_in_start_field ON drive (start_field ASC);
-        CREATE INDEX drive_in_end_field ON drive (end_field ASC);
+        CREATE INDEX drive_in_start_field ON drive
+            (((start_field).pos) ASC);
+        CREATE INDEX drive_in_end_field ON drive
+            (((end_field).pos) ASC);
         CREATE INDEX drive_in_start_time ON drive
             (((start_time).phase) ASC, ((start_time).elapsed) ASC);
         CREATE INDEX drive_in_end_time ON drive
             (((end_time).phase) ASC, ((end_time).elapsed) ASC);
         CREATE INDEX drive_in_pos_team ON drive (pos_team ASC);
-        CREATE INDEX drive_in_pos_time ON drive (pos_time DESC);
+        CREATE INDEX drive_in_pos_time ON drive
+            (((pos_time).elapsed) DESC);
         CREATE INDEX drive_in_first_downs ON drive (first_downs DESC);
         CREATE INDEX drive_in_penalty_yards ON drive (penalty_yards DESC);
         CREATE INDEX drive_in_yards_gained ON drive (yards_gained DESC);
@@ -508,11 +582,11 @@ def _migrate_2(c):
         CREATE INDEX play_in_drive_id ON play (drive_id ASC);
         CREATE INDEX play_in_time ON play
             (((time).phase) ASC, ((time).elapsed) ASC);
-        CREATE INDEX play_in_yardline ON play (yardline ASC);
+        CREATE INDEX play_in_yardline ON play
+            (((yardline).pos) ASC);
         CREATE INDEX play_in_down ON play (down ASC);
         CREATE INDEX play_in_yards_to_go ON play (yards_to_go DESC);
     ''')
     c.execute('''
-        CREATE INDEX stat_in_player_id ON stat (player_id ASC);
-        CREATE INDEX stat_in_category_id ON stat (category_id ASC);
+        CREATE INDEX play_player_in_player_id ON play_player (player_id ASC);
     ''')

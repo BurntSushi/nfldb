@@ -1,16 +1,30 @@
 #!/usr/bin/env python2.7
 
 from __future__ import absolute_import, division, print_function
+from collections import defaultdict
+import datetime
+import sys
+
+import pytz
 
 import nfldb
 
 import nflgame
 
+
+def log(*args, **kwargs):
+    kwargs['file'] = sys.stderr
+    print(*args, **kwargs)
+    sys.stderr.flush()
+
+log('Connecting to nfldb... ', end='')
 db = nfldb.connect()
-games = [nfldb.Game.from_nflgame(db, g) for g in nflgame.games(2012, 1)]
+log('done.')
 
 # We always insert dates and times as UTC.
+log('Setting timezone to UTC... ', end='')
 nfldb.set_timezone(db, 'UTC')
+log('done.')
 
 with nfldb.Tx(db) as cursor:
     # Lock all tables that the update script writes to. This is a hammer
@@ -19,12 +33,78 @@ with nfldb.Tx(db) as cursor:
     #
     # The lock used is a write lock; so other clients can still read from
     # the tables during an update.
+    log('Locking write access to tables... ', end='')
     cursor.execute('''
         LOCK TABLE player IN SHARE ROW EXCLUSIVE MODE;
         LOCK TABLE game IN SHARE ROW EXCLUSIVE MODE;
         LOCK TABLE drive IN SHARE ROW EXCLUSIVE MODE;
         LOCK TABLE play IN SHARE ROW EXCLUSIVE MODE;
-        LOCK TABLE stat IN SHARE ROW EXCLUSIVE MODE
+        LOCK TABLE play_player IN SHARE ROW EXCLUSIVE MODE
     ''')
-    for game in games:
-        game._save(cursor)
+    log('done.')
+
+    # First, fetch every game that's in the database already.
+    # For games that haven't been added yet, we can use faster insertions.
+    log('Fetching existing games... ', end='')
+    indb, finished = set(), set()
+    cursor.execute('SELECT gsis_id, finished FROM game')
+    for row in cursor.fetchall():
+        indb.add(row['gsis_id'])
+        if row['finished']:
+            finished.add(row['gsis_id'])
+    log('(got %d)... done.' % len(indb))
+
+    # Traverse every game in the schedule. Only update those that aren't final
+    # in the database.
+    log('Loading game data from nflgame... ')
+    update = [id for id in nflgame.schedule.games_byid if id not in finished]
+    update = sorted(update, key=int)
+
+    queued, updated = 0, 0
+    bulk = defaultdict(list)
+
+    def dobulk():
+        log('Processing queued bulk inserts...', end='')
+        for table in ('game', 'drive', 'play', 'play_player'):
+            if len(bulk[table]) > 0:
+                nfldb.db._big_insert(cursor, table, bulk[table])
+                bulk[table] = []
+        log('done.')
+
+    now = datetime.datetime.now(pytz.utc)
+    for gsis_id in update:
+        if queued >= 100:
+            dobulk()
+            queued = 0
+
+        schedule = nflgame.schedule.games_byid[gsis_id]
+        start_time = nfldb.types._nflgame_start_time(schedule)
+        if schedule['year'] != 2012 or schedule['week'] != 10:
+            continue
+        if (start_time - now).total_seconds() >= 900:
+            continue
+
+        g = nflgame.game.Game(gsis_id)
+        if g is None:
+            continue
+        game = nfldb.Game.from_nflgame(db, g)
+
+        if gsis_id in indb:
+            game._save(cursor)
+            log('Updated %s' % game)
+            updated += 1
+        else:
+            # It isn't in the database yet, so do quick bulk inserts.
+            log('Queueing %s' % game)
+            bulk['game'].append(game._row)
+            for drive in game.drives:
+                bulk['drive'].append(drive._row)
+                for play in drive.plays:
+                    bulk['play'].append(play._row)
+                    for pp in play.play_players:
+                        bulk['play_player'].append(pp._row)
+            queued += 1
+    log('(updated %d)... done.' % updated)
+
+    if queued > 0:
+        dobulk()

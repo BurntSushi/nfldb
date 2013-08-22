@@ -4,51 +4,46 @@ try:
     from collections import OrderedDict
 except ImportError:
     from ordereddict import OrderedDict
+from collections import defaultdict
 import datetime
 
 import enum
 
-import psycopg2
 from psycopg2.extensions import AsIs, ISQLQuote
 
 import pytz
 
 import nflgame
 
-from nfldb.db import Tx
+import nfldb.category
+from nfldb.db import _upsert, now, Tx
 
 __pdoc__ = {}
 
 
-def stat_categories(db):
+def _stat_categories():
     """
-    Given a database object, returns a `collections.OrderedDict` of all
-    statistical categories available for play-by-play data.
+    Returns a `collections.OrderedDict` of all statistical categories
+    available for play-by-play data.
     """
     cats = OrderedDict()
-    with Tx(db) as cursor:
-        cursor.execute('''
-            SELECT
-                category_id, gsis_number, category_type, is_real, description
-            FROM category
-            ORDER BY category_type ASC, category_id ASC
-        ''')
-        for row in cursor.fetchall():
-            cats[row['category_id']] = Category.from_row(row)
+    for row in nfldb.category.categories:
+        cat_type = Enums.category_scope[row[2]]
+        cats[row[3]] = Category(row[3], row[0], cat_type, row[1], row[4])
     return cats
 
 
-def _nflgame_start_time(g):
+def _nflgame_start_time(schedule):
     """
-    Given a `nflgame.game.Game` object, return the start time of the
+    Given an entry in `nflgame.schedule`, return the start time of the
     game in UTC.
     """
     # BUG: Getting the hour here will be wrong if a game starts before Noon
     # EST. Not sure what to do about it...
-    hour, minute = g.schedule['time'].strip().split(':')
+    hour, minute = schedule['time'].strip().split(':')
     hour, minute = (int(hour) + 12) % 24, int(minute)
-    d = datetime.datetime(g.schedule['year'], g.schedule['month'],
-                          g.schedule['day'], hour, minute)
+    d = datetime.datetime(schedule['year'], schedule['month'],
+                          schedule['day'], hour, minute)
     return pytz.timezone('US/Eastern').localize(d).astimezone(pytz.utc)
 
 
@@ -62,16 +57,73 @@ def _nflgame_clock(clock):
     return Clock(phase, elapsed)
 
 
+def _play_time(drive, play, next_play):
+    """
+    Given a `nfldb.Play` object and a `nfldb.Drive` object, returns
+    a `nfldb.Clock` object representing the play's game clock.
+    `next_play` must be a `nfldb.Play` object corresponding to the
+    next play in `drive` with valid time data.  It may be `None`, but
+    if `play` corresponds to a timeout or a two-minute warning, an
+    assertion error will be raised.
+
+    This is used for special non-plays like "Two-Minute Warning" or
+    timeouts. The source JSON data leaves the clock field NULL, but we
+    want to do better than that.
+
+    The drive is used to guess the quarter of a timeout and two-minute
+    warning.
+    """
+    assert not play.time  # Never do this when the play has time data!
+
+    desc = play.description.lower()
+    if next_play is not None and ('timeout' in desc or 'warning' in desc):
+        return next_play.time
+    elif 'end game' in desc or 'end of game' in desc:
+        return Clock(Enums.game_phase.Final, 0)
+    elif 'end quarter' in desc:
+        qtr = int(desc.strip()[12])
+        if qtr == 2:
+            return Clock(Enums.game_phase.Half, 0)
+        elif qtr == 5:
+            return Clock(Enums.game_phase.OT, Clock._phase_max)
+        elif qtr == 6:
+            return Clock(Enums.game_phase.OT2, Clock._phase_max)
+        else:
+            return Clock(Enums.game_phase['Q%d' % qtr], Clock._phase_max)
+    elif 'end of quarter' in desc:
+        if drive.start_time.phase is Enums.game_phase.Q2:
+            return Clock(Enums.game_phase.Half, 0)
+        else:
+            return Clock(drive.start_time.phase, Clock._phase_max)
+    elif 'end of half' in desc:
+        return Clock(Enums.game_phase.Half, 0)
+    return None
+
+
+def _next_play_with_time(plays, play):
+    """
+    Returns the next `nfldb.Play` after `play` in `plays` with valid
+    time data. If such a play does not exist, then `None` is returned.
+    """
+    get_next = False
+    for p in plays:
+        if get_next:
+            # Don't take a play without time info.
+            # e.g., Two timeouts in a row, or a two-minute warning
+            # next to a timeout.
+            if not p.time:
+                continue
+            return p
+        if p.play_id == play.play_id:
+            get_next = True
+    return None
+
+
 class _Enum (enum.Enum):
     """
     Conforms to the `getquoted` interface in psycopg2.
     This maps enum types to SQL.
     """
-    def __conform__(self, proto):
-        if proto is ISQLQuote:
-            return AsIs("'%s'" % self.name)
-        return None
-
     @staticmethod
     def _pg_cast(enum):
         """
@@ -80,6 +132,14 @@ class _Enum (enum.Enum):
         `nfldb.Enums`.
         """
         return lambda sqlv, _: enum[sqlv]
+
+    def __conform__(self, proto):
+        if proto is ISQLQuote:
+            return AsIs("'%s'" % self.name)
+        return None
+
+    def __str__(self):
+        return self.name
 
 
 class Enums (object):
@@ -92,7 +152,7 @@ class Enums (object):
 
     game_phase = _Enum('game_phase',
                        ['Pregame', 'Q1', 'Q2', 'Half',
-                        'Q3', 'Q4', 'OT', 'Final'])
+                        'Q3', 'Q4', 'OT', 'OT2', 'Final'])
     """
     Represents the phase of the game. e.g., `Q1` or `HALF`.
     """
@@ -128,6 +188,9 @@ class Enums (object):
     statistic that records third down attempts.
 
     Currently, `play` and `player` are the only possible values.
+
+    Note that this type is not represented in the database schema.
+    Values of this type are constructed from data in `category.py`.
     """
 
     _nflgame_season_phase = {
@@ -150,6 +213,7 @@ class Enums (object):
         4: game_phase.Q3,
         5: game_phase.Q4,
         6: game_phase.OT,
+        7: game_phase.OT2,
     }
     """
     Maps a game phase in `nflgame` to a `nfldb.Enums.game_phase`.
@@ -175,13 +239,28 @@ class Team (object):
     Represents information about an NFL team. This includes its
     standard three letter abbreviation, city and mascot name.
     """
-    def __init__(self, abbr):
+    __slots__ = ['team_id', 'city', 'name']
+    __cache = defaultdict(dict)
+
+    def __new__(cls, db, abbr):
+        abbr = nflgame.standard_team(abbr)
+        if abbr in Team.__cache:
+            return Team.__cache[abbr]
+        return object.__new__(cls)
+
+    def __init__(self, db, abbr):
         """
-        Creates a new team its standard abbreviation. The rest of a
-        team's information is either captured from cache or from the
-        database.
+        Introduces a new team given its standard abbreviation and a
+        database connection.
+
+        Note that since team data is small, it is cached to a
+        particular database connection.
         """
-        self.team_id = abbr
+        if hasattr(self, 'team_id'):
+            # Loaded from cache.
+            return
+
+        self.team_id = nflgame.standard_team(abbr)
         """
         The unique team identifier represented as its standard
         2 or 3 letter abbreviation.
@@ -194,6 +273,17 @@ class Team (object):
         """
         The full "mascot" name of this team.
         """
+        if self.team_id not in Team.__cache:
+            with Tx(db) as cur:
+                cur.execute('SELECT * FROM team WHERE team_id = %s',
+                            (self.team_id,))
+                row = cur.fetchone()
+                self.city = row['city']
+                self.name = row['name']
+            Team.__cache[self.team_id] = self
+
+    def __str__(self):
+        return '%s %s' % (self.city, self.name)
 
     def __conform__(self, proto):
         if proto is ISQLQuote:
@@ -208,16 +298,6 @@ class Category (object):
     """
     __slots__ = ['category_id', 'gsis_number', 'category_type',
                  'is_real', 'description']
-
-    @staticmethod
-    def from_row(row):
-        """
-        Introduces a `nfldb.Category` object from a row in the
-        `category` table.
-        """
-        return Category(row['category_id'], row['gsis_number'],
-                        row['category_type'], row['is_real'],
-                        row['description'])
 
     def __init__(self, category_id, gsis_number, category_type,
                  is_real, description):
@@ -274,6 +354,10 @@ class FieldPosition (object):
     """
     __slots__ = ['__offset']
 
+    @staticmethod
+    def _pg_cast(sqlv, cursor):
+        return FieldPosition(int(sqlv[1:-1]))
+
     def __init__(self, offset):
         """
         Makes a new `nfldb.FieldPosition` given a field `offset`.
@@ -327,7 +411,7 @@ class FieldPosition (object):
             if not self.valid:
                 return AsIs("NULL")
             else:
-                return AsIs("%d" % self.__offset)
+                return AsIs("ROW(%d)::field_pos" % self.__offset)
         return None
 
 
@@ -347,11 +431,16 @@ class PossessionTime (object):
         minutes, seconds = map(int, clock_str.split(':', 1))
         return PossessionTime((minutes * 60) + seconds)
 
+    @staticmethod
+    def _pg_cast(sqlv, cursor):
+        return PossessionTime(int(sqlv[1:-1]))
+
     def __init__(self, seconds):
         """
         Returns a `nfldb.PossessionTime` object given the number of
         seconds of the possession.
         """
+        assert isinstance(seconds, int)
         self.__seconds = seconds
 
     @property
@@ -408,7 +497,7 @@ class PossessionTime (object):
             if not self.valid:
                 return AsIs("NULL")
             else:
-                return AsIs("%d" % self.__seconds)
+                return AsIs("ROW(%d)::pos_period" % self.__seconds)
         return None
 
 
@@ -424,8 +513,8 @@ class Clock (object):
     conversion.)
     """
 
-    __nonqs = (Enums.game_phase.Pregame, Enums.game_phase.Half,
-               Enums.game_phase.Final)
+    _nonqs = (Enums.game_phase.Pregame, Enums.game_phase.Half,
+              Enums.game_phase.Final)
     """
     The phases of the game that do not have a time component.
     """
@@ -435,26 +524,35 @@ class Clock (object):
     The maximum number of seconds in a game phase.
     """
 
-    def __init__(self, game_phase, elapsed):
+    @staticmethod
+    def _pg_cast(sqlv, cursor):
         """
-        Introduces a new `nfldb.Clock` object. `game_phase` should
+        Casts a SQL string of the form `(game_phase, elapsed)` to a
+        `nfldb.Clock` object.
+        """
+        phase, elapsed = map(str.strip, sqlv[1:-1].split(','))
+        return Clock(Enums.game_phase[phase], int(elapsed))
+
+    def __init__(self, phase, elapsed):
+        """
+        Introduces a new `nfldb.Clock` object. `phase` should
         be a value from the `nfldb.Enums.game_phase` enumeration
         while `elapsed` should be the number of seconds elapsed in
-        the `game_phase`. Note that `elapsed` is only applicable when
-        `game_phase` is a quarter (including overtime). In all other
+        the `phase`. Note that `elapsed` is only applicable when
+        `phase` is a quarter (including overtime). In all other
         cases, it will be set to `0`.
 
         `elapsed` should be in the range `[0, 900]` where `900`
         corresponds to the clock time `0:00` and `0` corresponds
         to the clock time `15:00`.
         """
-        assert isinstance(game_phase, Enums.game_phase)
+        assert isinstance(phase, Enums.game_phase)
         assert 0 <= elapsed <= Clock._phase_max
 
-        if game_phase in Clock.__nonqs:
+        if phase in Clock._nonqs:
             elapsed = 0
 
-        self.game_phase = game_phase
+        self.phase = phase
         """
         The phase represented by this clock object. It is guaranteed
         to have type `nfldb.Enums.game_phase`.
@@ -484,56 +582,461 @@ class Clock (object):
         return (Clock._phase_max - self.elapsed) % 60
 
     def __str__(self):
-        phase = self.game_phase
-        if phase in Clock.__nonqs:
+        phase = self.phase
+        if phase in Clock._nonqs:
             return phase.name
         else:
-            return '%s %d:%d' % (phase.name, self.minutes, self.seconds)
+            return '%s %02d:%02d' % (phase.name, self.minutes, self.seconds)
 
     def __lt__(self, o):
-        return (self.game_phase, self.elapsed) < (o.game_phase, o.elapsed)
+        return (self.phase, self.elapsed) < (o.phase, o.elapsed)
 
     def __eq__(self, o):
-        return self.game_phase == o.game_phase and self.elapsed == o.elapsed
+        return self.phase == o.phase and self.elapsed == o.elapsed
 
     def __conform__(self, proto):
         if proto is ISQLQuote:
             return AsIs("ROW('%s', %d)::game_time"
-                        % (self.game_phase.name, self.elapsed))
+                        % (self.phase.name, self.elapsed))
         return None
 
 
-class Drive (object):
+stat_categories = _stat_categories()
+"""
+An ordered dictionary of every statistical category available for
+play-by-play data. The keys are the category identifier (e.g.,
+`passing_yds`) and the values are `nfldb.Category` objects.
+"""
+
+_play_categories = OrderedDict(
+    [(n, c) for n, c in stat_categories.items()
+     if c.category_type is Enums.category_scope.play])
+_player_categories = OrderedDict(
+    [(n, c) for n, c in stat_categories.items()
+     if c.category_type is Enums.category_scope.player])
+
+
+class Player (object):
+    __slots__ = ['player_id', 'gsis_name', 'full_name', 'last_team',
+                 'position',
+                 ]
+
     @staticmethod
-    def from_nflgame(g, drive):
+    def from_nflgame(p):
         """
-        Given `g` as a `nfldb.Game` object and `drive` as a
-        `nflgame.game.Drive` object, `from_nflgame` will convert
-        `drive` to a `nfldb.Drive` object.
+        Given `p` as a `nflgame.player.PlayPlayerStats` object,
+        `from_nflgame` converts `p` to a `nfldb.Player` object.
+        """
+        full_name, position, team = None, None, p.team
+        if p.player is not None:
+            full_name = p.player.name
+            position = Enums.playerpos[p.player.position]
+            team = p.player.team
+        return Player(p.playerid, p.name, full_name, team, position)
+
+    def __init__(self, player_id, gsis_name, full_name, last_team, position):
+        """
+        Introduces a new `nfldb.Player` object with the given
+        attributes.
+
+        A player object contains data known about a player as
+        person. Namely, this object is not responsible for containing
+        statistical data related to a player at some particular point
+        in time.
+        """
+        self.player_id = player_id
+        """
+        The player_id linking this object `nfldb.PlayPlayer` object.
+
+        N.B. This is the GSIS identifier string. It always has length
+        10.
+        """
+        self.gsis_name = gsis_name
+        """
+        The name of a player from the source GameCenter data. This
+        field is guaranteed to contain a name.
+        """
+        self.full_name = full_name
+        """
+        The full name of a player if it's available. This may be
+        `None`.
+        """
+        self.last_team = last_team
+        """
+        The last known team that this player was associated with.
+        If the player is no longer active, then this will likely be
+        the team that the player last recorded a statistic with.
+        """
+        self.position = position
+        """
+        The current position of a player if it's available. This may
+        be `None`. If it's not `None`, then it is represented by the
+        `Enums.playerpos` enumeration.
+        """
+
+    @property
+    def _row(self):
+        return [
+            ('player_id', self.player_id),
+            ('gsis_name', self.gsis_name),
+            ('full_name', self.full_name),
+            ('last_team', self.last_team),
+            ('position', self.position),
+        ]
+
+    def _save(self, cursor):
+        vals = self._row
+        _upsert(cursor, 'player', vals, [vals[0]])
+
+
+class PlayPlayer (object):
+    __slots__ = (_player_categories.keys()
+                 + ['gsis_id', 'drive_id', 'play_id', 'player_id',
+                    '_play', '_player']
+                 )
+
+    @staticmethod
+    def from_nflgame(p, pp):
+        """
+        Given `p` as a `nfldb.Play` object and `pp` as a
+        `nflgame.player.PlayPlayerStats` object, `from_nflgame`
+        converts `pp` to a `nfldb.PlayPlayer` object.
+        """
+        stats = {}
+        for k in _player_categories:
+            if k in pp._stats:
+                stats[k] = pp._stats[k]
+
+        play_player = PlayPlayer(p, p.gsis_id, p.drive_id, p.play_id,
+                                 pp.playerid, stats)
+        play_player._player = Player.from_nflgame(pp)
+        return play_player
+
+    def __init__(self, play, gsis_id, drive_id, play_id, player_id, stats):
+        """
+        Introduces a new `nfldb.PlayPlayer` object. A "play player"
+        is a statistical grouping of categories for a single player
+        inside a play. For example, passing the ball to a receiver
+        necessarily requires two "play players": the pass (by player
+        X) and the reception (by player Y). Statistics that aren't
+        included, for example, are blocks and penalties. (Although
+        penalty information can be gleaned from a play's free-form
+        `nfldb.Play.description` attribute.)
+
+        Each `nfldb.PlayPlayer` object belongs to exactly one
+        `nfldb.Play` and exactly one `nfldb.Player`.
+        """
+        self._play = play
+        self._player = None
+
+        self.gsis_id = gsis_id
+        """
+        The GSIS identifier for the game that this "play player"
+        belongs to.
+        """
+        self.drive_id = drive_id
+        """
+        The numeric drive identifier for this "play player". It may be
+        interpreted as a sequence number.
+        """
+        self.play_id = play_id
+        """
+        The numeric play identifier for this "play player". It can
+        typically be interpreted as a sequence number scoped to the
+        week that this game was played, but it's unfortunately not
+        completely consistent.
+        """
+        self.player_id = player_id
+        """
+        The player_id linking these stats to a `nfldb.Player` object.
+        Use `nfldb.PlayPlayer.player` to access player meta data.
+
+        N.B. This is the GSIS identifier string. It always has length
+        10.
+        """
+        # Extract the relevant statistical categories only.
+        for cat in stats:
+            if cat in _player_categories:
+                setattr(self, cat, stats[cat])
+
+    @property
+    def play(self):
+        """
+        Returns the `nfldb.Play` object that this "play player" belongs
+        to. The play is retrieved from the database if necessary.
+        """
+        if self._play is None:
+            assert False, 'unimplemented'
+        return self._play
+
+    @property
+    def player(self):
+        """
+        Returns the `nfldb.Player` object that this "play player"
+        corresponds to. The player is retrieved from the database if
+        necessary.
+        """
+        if self._player is None:
+            assert False, 'unimplemented'
+        return self._player
+
+    @property
+    def _row(self):
+        vals = [
+            ('gsis_id', self.gsis_id),
+            ('drive_id', self.drive_id),
+            ('play_id', self.play_id),
+            ('player_id', self.player_id),
+        ]
+        for cat in _player_categories:
+            vals.append((cat, getattr(self, cat, None)))
+        return vals
+
+    def _save(self, cursor):
+        vals = self._row
+        _upsert(cursor, 'play_player', vals, vals[0:4])
+
+
+class Play (object):
+    __slots__ = (_play_categories.keys()
+                 + ['gsis_id', 'drive_id', 'play_id', 'time', 'pos_team',
+                    'yardline', 'down', 'yards_to_go', 'description', 'note',
+                    'time_inserted', 'time_updated',
+                    '_drive', '_play_players']
+                 )
+
+    @staticmethod
+    def from_nflgame(d, p):
+        """
+        Given `d` as a `nfldb.Drive` object and `p` as a
+        `nflgame.game.Play` object, `from_nflgame` converts `p` to a
+        `nfldb.Play` object.
+        """
+        stats = {}
+        for k in _play_categories:
+            if k in p._stats:
+                stats[k] = p._stats[k]
+
+        # Fix up some fields so they meet the constraints of the schema.
+        # The `time` field is cleaned up afterwards in
+        # `nfldb.Drive.from_nflgame`, since it needs data about surrounding
+        # plays.
+        time = None if not p.time else _nflgame_clock(p.time)
+        yardline = FieldPosition(getattr(p.yardline, 'offset', None))
+        down = p.down if 1 <= p.down <= 4 else None
+        team = p.team if p.team is not None and len(p.team) > 0 else None
+        play = Play(d, d.gsis_id, d.drive_id, int(p.playid), time, team,
+                    yardline, down, p.yards_togo, p.desc, p.note,
+                    None, None, stats)
+
+        for pp in p.players:
+            play._play_players.append(PlayPlayer.from_nflgame(play, pp))
+        return play
+
+    def __init__(self, drive, gsis_id, drive_id, play_id, time, pos_team,
+                 yardline, down, yards_to_go, description, note,
+                 time_inserted, time_updated, stats):
+        """
+        Introduces a new `nfldb.Play` object with the given
+        attributes. Note that `drive` must be a `nfldb.Drive` object
+        or `None`. When it's `None`, the `drive` property will be
+        populated on demand from the database.
+
+        `stats` should be a dictionary of statistical play categories
+        from `nfldb.stat_categories`. The dictionary may contain other
+        keys; they won't be used. (i.e., You may pass a psycopg2 result
+        dictionary constructed from a table row.)
+        """
+        self._drive = drive
+        self._play_players = []
+
+        self.gsis_id = gsis_id
+        """
+        The GSIS identifier for the game that this play belongs to.
+        """
+        self.drive_id = drive_id
+        """
+        The numeric drive identifier for this play. It may be
+        interpreted as a sequence number.
+        """
+        self.play_id = play_id
+        """
+        The numeric play identifier for this play. It can typically
+        be interpreted as a sequence number scoped to the week that
+        this game was played, but it's unfortunately not completely
+        consistent.
+        """
+        self.time = time
+        """
+        The time on the clock when the play started, represented with
+        a `nfldb.Clock` object.
+        """
+        self.pos_team = pos_team
+        """
+        The team in possession during this play, represented as
+        a team abbreviation string. Use the `nfldb.Team` constructor
+        to get more information on a team.
+        """
+        self.yardline = yardline
+        """
+        The starting field position of this play represented with
+        `nfldb.FieldPosition`.
+        """
+        self.down = down
+        """
+        The down on which this play begin. This may be `0` for
+        "special" plays like timeouts or 2 point conversions.
+        """
+        self.yards_to_go = yards_to_go
+        """
+        The number of yards to go to get a first down or score a
+        touchdown at the start of the play.
+        """
+        self.description = description
+        """
+        A (basically) free-form text description of the play. This is
+        typically what you see on NFL GameCenter web pages.
+        """
+        self.note = note
+        """
+        A miscellaneous note field (as a string). Not sure what it's
+        used for.
+        """
+        self.time_inserted = time_inserted
+        """The date and time that this play was added."""
+        self.time_updated = time_updated
+        """The date and time that this play was last updated."""
+
+        # Extract the relevant statistical categories only.
+        for cat in stats:
+            if cat in _play_categories:
+                setattr(self, cat, stats[cat])
+
+    @property
+    def drive(self):
+        """
+        Returns the `nfldb.Drive` object that contains this play. The
+        drive is retrieved from the database if it hasn't been already.
+        """
+        if self._drive is None:
+            assert False, 'unimplemented'
+        return self._drive
+
+    @property
+    def play_players(self):
+        """
+        Returns a list of all `nfldb.PlayPlayer`s in this play. They
+        are automatically retrieved from the database if they haven't
+        been already.
+        """
+        if self._play_players is None:
+            assert False, 'unimplemented'
+        return self._play_players
+
+    @property
+    def _row(self):
+        vals = [
+            ('gsis_id', self.gsis_id),
+            ('drive_id', self.drive_id),
+            ('play_id', self.play_id),
+            ('time', self.time),
+            ('pos_team', self.pos_team),
+            ('yardline', self.yardline),
+            ('down', self.down),
+            ('yards_to_go', self.yards_to_go),
+            ('description', self.description),
+            ('note', self.note),
+        ]
+        for cat in _play_categories:
+            vals.append((cat, getattr(self, cat, None)))
+        return vals
+
+    def _save(self, cursor):
+        vals = self._row
+        _upsert(cursor, 'play', vals, vals[0:3])
+
+        # Remove any "play players" that are stale.
+        cursor.execute('''
+            DELETE FROM play_players
+            WHERE gsis_id = %s AND drive_id = %s AND play_id = %s
+                  AND NOT (player_id = ANY (%s))
+        ''', (self.gsis_id, self.drive_id, self.play_id,
+              [p.player_id for p in self._play_players]))
+        for pp in self._play_players:
+            pp._save(cursor)
+
+
+class Drive (object):
+    __slots__ = ['gsis_id', 'drive_id', 'start_field', 'start_time',
+                 'end_field', 'end_time', 'pos_team', 'pos_time',
+                 'first_downs', 'result', 'penalty_yards', 'yards_gained',
+                 'play_count',
+                 'time_inserted', 'time_updated',
+                 '_game', '_plays',
+                 ]
+
+    @staticmethod
+    def from_nflgame(g, d):
+        """
+        Given `g` as a `nfldb.Game` object and `d` as a
+        `nflgame.game.Drive` object, `from_nflgame` converts `d` to a
+        `nfldb.Drive` object.
 
         Generally, this function should not be used. It is called
         automatically by `nfldb.Game.from_nflgame`.
         """
-        start_time = _nflgame_clock(drive.time_start)
-        start_field = FieldPosition(getattr(drive.field_start, 'offset', None))
-        end_field = FieldPosition(drive.field_end.offset)
-        end_time = _nflgame_clock(drive.time_end)
-        return Drive(g, drive.drive_num, start_field, start_time,
-                     end_field, end_time, Team(drive.team),
-                     PossessionTime(drive.pos_time.total_seconds()),
-                     drive.first_downs, drive.result, drive.penalty_yds,
-                     drive.total_yds, drive.play_cnt)
+        start_time = _nflgame_clock(d.time_start)
+        start_field = FieldPosition(getattr(d.field_start, 'offset', None))
+        end_field = FieldPosition(d.field_end.offset)
+        end_time = _nflgame_clock(d.time_end)
+        drive = Drive(g, g.gsis_id, d.drive_num, start_field, start_time,
+                      end_field, end_time, d.team,
+                      PossessionTime(d.pos_time.total_seconds()),
+                      d.first_downs, d.result, d.penalty_yds,
+                      d.total_yds, d.play_cnt, None, None)
 
-    def __init__(self, g, drive_id, start_field, start_time,
+        candidates = []
+        for play in d.plays:
+            candidates.append(Play.from_nflgame(drive, play))
+
+        # At this point, some plays don't have valid game times. Fix it!
+        # If we absolutely cannot fix it, drop the play. Maintain integrity!
+        for play in candidates:
+            if play.time is None:
+                play.time = _play_time(drive, play,
+                                       _next_play_with_time(candidates, play))
+            if play.time is not None:
+                drive._plays.append(play)
+        return drive
+
+    @staticmethod
+    def from_row(r):
+        return Drive(None, r['gsis_id'], r['drive_id'], r['start_field'],
+                     r['start_time'], r['end_field'], r['end_time'],
+                     r['pos_team'], r['pos_time'], r['first_downs'],
+                     r['result'], r['penalty_yards'], r['yards_gained'],
+                     r['play_count'], r['time_inserted'], r['time_updated'])
+
+    def __init__(self, game, gsis_id, drive_id, start_field, start_time,
                  end_field, end_time, pos_team, pos_time,
-                 first_downs, result, penalty_yards, yards_gained, play_count):
-        self.game = g
+                 first_downs, result, penalty_yards, yards_gained, play_count,
+                 time_inserted, time_updated):
         """
-        The `nfldb.Game` object that this drive belongs to.
+        Introduces a new `nfldb.Drive` object with the given attributes.
+        Note that `game` must be a `nfldb.Game` object, or it may be
+        `None`. When it's `None`, then `nfldb.Drive.game` will fetch
+        game information on demand.
+        """
+        self._game = game
+        self._plays = []
+
+        self.gsis_id = gsis_id
+        """
+        The GSIS identifier for the game that this drive belongs to.
         """
         self.drive_id = drive_id
         """
-        The numeric drive identifier for this game. It may be
+        The numeric drive identifier for this drive. It may be
         interpreted as a sequence number.
         """
         self.start_field = start_field
@@ -558,8 +1061,9 @@ class Drive (object):
         """
         self.pos_team = pos_team
         """
-        The team in possession during this drive, represented with
-        `nfldb.Team`.
+        The team in possession during this drive, represented as
+        a team abbreviation string. Use the `nfldb.Team` constructor
+        to get more information on a team.
         """
         self.pos_time = pos_time
         """
@@ -589,9 +1093,35 @@ class Drive (object):
         The total number of plays executed by the offense in this
         drive.
         """
+        self.time_inserted = time_inserted
+        """The date and time that this play was added."""
+        self.time_updated = time_updated
+        """The date and time that this play was last updated."""
 
-    def _save(self, cursor):
-        vals = [
+    @property
+    def game(self):
+        """
+        Returns the `nfldb.Game` object that contains this drive. The
+        game is retrieved from the database if it hasn't been already.
+        """
+        if self._game is None:
+            assert False, 'unimplemented'
+        return self._game
+
+    @property
+    def plays(self):
+        """
+        Returns a list of all `nfldb.Play`s in this drive. They are
+        automatically retrieved from the database if they haven't been
+        already.
+        """
+        if self._plays is None:
+            assert False, 'unimplemented'
+        return self._plays
+
+    @property
+    def _row(self):
+        return [
             ('gsis_id', self.game.gsis_id),
             ('drive_id', self.drive_id),
             ('start_field', self.start_field),
@@ -606,20 +1136,32 @@ class Drive (object):
             ('yards_gained', self.yards_gained),
             ('play_count', self.play_count),
         ]
+
+    def _save(self, cursor):
+        vals = self._row
         _upsert(cursor, 'drive', vals, vals[0:2])
+
+        # Remove any plays that are stale.
+        cursor.execute('''
+            DELETE FROM play
+            WHERE gsis_id = %s AND drive_id = %s AND NOT (play_id = ANY (%s))
+        ''', (self.gsis_id, self.drive_id, [p.play_id for p in self._plays]))
+        for play in self._plays:
+            play._save(cursor)
 
 
 class Game (object):
     __slots__ = ['gsis_id', 'gamekey', 'start_time', 'week', 'day_of_week',
-                 'season_year', 'season_type',
+                 'season_year', 'season_type', 'finished',
                  'home_team', 'home_score', 'home_score_q1', 'home_score_q2',
                  'home_score_q3', 'home_score_q4', 'home_score_q5',
                  'home_turnovers',
                  'away_team', 'away_score', 'away_score_q1', 'away_score_q2',
                  'away_score_q3', 'away_score_q4', 'away_score_q5',
                  'away_turnovers',
+                 'time_inserted', 'time_updated',
                  'db',
-                 '__drives',
+                 '_drives',
                  ]
 
     @staticmethod
@@ -635,32 +1177,45 @@ class Game (object):
         away_team = nflgame.standard_team(g.away)
         season_type = Enums._nflgame_season_phase[g.schedule['season_type']]
         day_of_week = Enums._nflgame_game_day[g.schedule['wday']]
-        start_time = _nflgame_start_time(g)
+        start_time = _nflgame_start_time(g.schedule)
+        finished = g.game_over()
+
+        # If it's been 8 hours since game start, we always conclude finished!
+        if (now() - start_time).total_seconds() >= (60 * 60 * 8):
+            finished = True
+
+        # The season year should always be the same for every game in the
+        # season. e.g., games played in jan-feb of 2013 are in season 2012.
+        season_year = g.schedule['year']
+        if int(g.eid[4:6]) <= 3:
+            season_year -= 1
         game = Game(db, g.eid, g.gamekey, start_time, g.schedule['week'],
-                    day_of_week, g.schedule['year'], season_type,
+                    day_of_week, season_year, season_type, finished,
                     home_team, g.score_home, g.score_home_q1,
                     g.score_home_q2, g.score_home_q3, g.score_home_q4,
                     g.score_home_q5, int(g.data['home']['to']),
                     away_team, g.score_away, g.score_away_q1,
                     g.score_away_q2, g.score_away_q3, g.score_away_q4,
-                    g.score_away_q5, int(g.data['away']['to']))
+                    g.score_away_q5, int(g.data['away']['to']),
+                    None, None)
 
-        game.__drives = []
         for drive in g.drives:
-            game.__drives.append(Drive.from_nflgame(game, drive))
+            game._drives.append(Drive.from_nflgame(game, drive))
         return game
 
     def __init__(self, db, gsis_id, gamekey, start_time, week, day_of_week,
-                 season_year, season_type,
+                 season_year, season_type, finished,
                  home_team, home_score, home_score_q1, home_score_q2,
                  home_score_q3, home_score_q4, home_score_q5, home_turnovers,
                  away_team, away_score, away_score_q1, away_score_q2,
-                 away_score_q3, away_score_q4, away_score_q5, away_turnovers):
+                 away_score_q3, away_score_q4, away_score_q5, away_turnovers,
+                 time_inserted, time_updated):
         """
         A basic constructor for making a `nfldb.Game` object. It is
         advisable to use one of the `nfldb.Game.from_` methods to
         introduce a new `nfldb.Game` object.
         """
+        self._drives = []
 
         self.db = db
         """
@@ -710,8 +1265,15 @@ class Game (object):
         `Regular season` or `Postseason`. All valid values correspond
         to the `nfldb.Enums.season_phase`.
         """
+        self.finished = finished
+        """
+        A boolean that is `True` if and only if the game has finished.
+        """
         self.home_team = home_team
-        """The team abbreviation for the home team."""
+        """
+        The team abbreviation for the home team. Use the `nfldb.Team`
+        constructor to get more information on a team.
+        """
         self.home_score = home_score
         """The current total score for the home team."""
         self.home_score_q1 = home_score_q1
@@ -727,7 +1289,10 @@ class Game (object):
         self.home_turnovers = home_turnovers
         """Total turnovers for the home team."""
         self.away_team = away_team
-        """The team abbreviation for the away team."""
+        """
+        The team abbreviation for the away team. Use the `nfldb.Team`
+        constructor to get more information on a team.
+        """
         self.away_score = away_score
         """The current total score for the away team."""
         self.away_score_q1 = away_score_q1
@@ -742,9 +1307,25 @@ class Game (object):
         """The OT quarter score for the away team."""
         self.away_turnovers = away_turnovers
         """Total turnovers for the away team."""
+        self.time_inserted = time_inserted
+        """The date and time that this play was added."""
+        self.time_updated = time_updated
+        """The date and time that this play was last updated."""
 
-    def _save(self, cursor):
-        vals = [
+    @property
+    def drives(self):
+        """
+        Returns a list of `nfldb.Drive`s for this game. They are
+        automatically loaded from the database if they haven't been
+        already.
+        """
+        if self._drives is None:
+            assert False, 'unimplemented'
+        return self._drives
+
+    @property
+    def _row(self):
+        return [
             ('gsis_id', self.gsis_id),
             ('gamekey', self.gamekey),
             ('start_time', self.start_time),
@@ -752,6 +1333,7 @@ class Game (object):
             ('day_of_week', self.day_of_week),
             ('season_year', self.season_year),
             ('season_type', self.season_type),
+            ('finished', self.finished),
             ('home_team', self.home_team),
             ('home_score', self.home_score),
             ('home_score_q1', self.home_score_q1),
@@ -769,28 +1351,23 @@ class Game (object):
             ('away_score_q5', self.away_score_q5),
             ('away_turnovers', self.away_turnovers),
         ]
+
+    def _save(self, cursor):
+        vals = self._row
         _upsert(cursor, 'game', vals, [vals[0]])
-        for drive in self.__drives:
+
+        # Remove any drives that are stale.
+        cursor.execute('''
+            DELETE FROM drive
+            WHERE gsis_id = %s AND NOT (drive_id = ANY (%s))
+        ''', (self.gsis_id, [d.drive_id for d in self._drives]))
+        for drive in self._drives:
             drive._save(cursor)
 
-
-def _upsert(cursor, table, data, pk):
-    update_set = ', '.join(['%s = %s' % (k, '%s') for k, _ in data])
-    insert_fields = ', '.join([k for k, _ in data])
-    insert_places = ', '.join(['%s' for _ in data])
-    pk_cond = ' AND '.join(['%s = %s' % (k, '%s') for k, _ in pk])
-    q = '''
-        UPDATE %s SET %s WHERE %s;
-    ''' % (table, update_set, pk_cond)
-    q += '''
-        INSERT INTO %s (%s)
-        SELECT %s WHERE NOT EXISTS (SELECT 1 FROM %s WHERE %s)
-    ''' % (table, insert_fields, insert_places, table, pk_cond)
-
-    values = [v for _, v in data]
-    pk_values = [v for _, v in pk]
-    try:
-        cursor.execute(q, values + pk_values + values + pk_values)
-    except psycopg2.ProgrammingError as e:
-        print(cursor.query)
-        raise e
+    def __str__(self):
+        return '%s %d week %d on %s at %s, %s (%d) at %s (%d)' \
+               % (self.season_type, self.season_year, self.week,
+                  self.start_time.strftime('%m/%d'),
+                  self.start_time.strftime('%I:%M%p'),
+                  self.away_team, self.away_score,
+                  self.home_team, self.home_score)
