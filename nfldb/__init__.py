@@ -9,8 +9,8 @@ from nfldb.db import api_version, connect, now, set_timezone, schema_version
 from nfldb.db import Tx
 from nfldb.types import __pdoc__ as __types_pdoc__
 from nfldb.types import stat_categories
-from nfldb.types import Clock, Enums, Drive, FieldPosition, Game
-from nfldb.types import PossessionTime, Team
+from nfldb.types import Category, Clock, Enums, Drive, FieldPosition, Game
+from nfldb.types import Play, Player, PlayPlayer, PossessionTime, Team
 from nfldb.version import __version__
 
 __pdoc__ = __db_pdoc__
@@ -25,8 +25,8 @@ __all__ = [
 
     # nfldb.types
     'stat_categories',
-    'Clock', 'Enums', 'Drive', 'FieldPosition', 'Game',
-    'PossessionTime', 'Team',
+    'Category', 'Clock', 'Enums', 'Drive', 'FieldPosition', 'Game',
+    'Play', 'Player', 'PlayPlayer', 'PossessionTime', 'Team',
 
     # nfldb.version
     '__version__',
