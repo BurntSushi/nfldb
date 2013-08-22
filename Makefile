@@ -21,7 +21,7 @@ dev-install: docs
 	pip install -U dist/*.tar.gz
 
 pep8:
-	pep8-python2 nfldb/*.py
+	pep8-python2 nfldb/{__init__,db,types,version}.py
 	pep8-python2 scripts/nfldb-update
 
 push:
