@@ -601,8 +601,11 @@ class Clock (object):
         return None
 
 
+# We've got to put the stat category stuff because we need the
+# Enums class defined. But `Play` and `PlayPlayer` need these
+# categories to fill in __slots__ in their definition too. Ugly.
 stat_categories = _stat_categories()
-"""
+__pdoc__['stat_categories'] = """
 An ordered dictionary of every statistical category available for
 play-by-play data. The keys are the category identifier (e.g.,
 `passing_yds`) and the values are `nfldb.Category` objects.
@@ -614,6 +617,12 @@ _play_categories = OrderedDict(
 _player_categories = OrderedDict(
     [(n, c) for n, c in stat_categories.items()
      if c.category_type is Enums.category_scope.player])
+
+# Let's be awesome and add auto docs.
+for cat in _play_categories.values():
+    __pdoc__['Play.%s' % cat.category_id] = cat.description
+for cat in _player_categories.values():
+    __pdoc__['PlayPlayer.%s' % cat.category_id] = cat.description
 
 
 class Player (object):
@@ -671,7 +680,7 @@ class Player (object):
         """
         The current position of a player if it's available. This may
         be `None`. If it's not `None`, then it is represented by the
-        `Enums.playerpos` enumeration.
+        `nfldb.Enums.playerpos` enumeration.
         """
 
     @property
@@ -838,9 +847,9 @@ class Play (object):
                  time_inserted, time_updated, stats):
         """
         Introduces a new `nfldb.Play` object with the given
-        attributes. Note that `drive` must be a `nfldb.Drive` object
-        or `None`. When it's `None`, the `drive` property will be
-        populated on demand from the database.
+        attributes. Note that `drive` must be a `nfldb.Drive` object or
+        `None`. When it's `None`, the `nfldb.Play.drive` property will
+        be populated on demand from the database.
 
         `stats` should be a dictionary of statistical play categories
         from `nfldb.stat_categories`. The dictionary may contain other
