@@ -41,8 +41,6 @@ def games_to_update(cursor):
     N.B. Games in the first list get bulk inserted. Drives/plays in
     games from the second list need to be updated one-at-a-time.
     """
-    log('Fetching games to update... ', end='')
-
     has_drive, finished = set(), set()
     cursor.execute('''
         SELECT DISTINCT game.gsis_id, game.finished
@@ -66,7 +64,6 @@ def games_to_update(cursor):
         else:
             nada.append(gsis_id)
 
-    log('(got %d to update; %d to add)... done.' % (len(playing), len(nada)))
     s = lambda xs: sorted(xs, key=int)
     return s(nada), s(playing)
 
@@ -108,7 +105,9 @@ def update_players(cursor):
             insert.append(nfldb.Player.from_nflgame_player(p)._row)
         nfldb.db._big_insert(cursor, 'player', insert)
     else:
-        pass
+        for p in nflgame.players.itervalues():
+            vals = nfldb.Player.from_nflgame_player(p)._row
+            nfldb.db._upsert(cursor, 'player', vals, [vals[0]])
 
 
 def bulk_insert_games(cursor, gsis_ids):
@@ -185,6 +184,9 @@ with nfldb.Tx(db) as cursor:
     log('done.')
 
 with nfldb.Tx(db) as cursor:
+    log('Updating players... ', end='')
     update_players(cursor)
+    log('done.')
+
     nada, playing = games_to_update(cursor)
     bulk_insert_games(cursor, nada)
