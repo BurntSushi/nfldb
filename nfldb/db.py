@@ -66,7 +66,6 @@ def connect(database=None, user=None, password=None, host=None, port=None,
     conn = psycopg2.connect(database=database, user=user, password=password,
                             host=host, port=port,
                             cursor_factory=RealDictCursor)
-    set_timezone(conn, timezone)
 
     # Start the migration. Make sure if this is the initial setup that
     # the DB is empty.
@@ -76,14 +75,18 @@ def connect(database=None, user=None, password=None, host=None, port=None,
         % (api_version, sversion)
     assert sversion > 0 or (sversion == 0 and _is_empty(conn)), \
         'Schema has version 0 but is not empty.'
+    set_timezone(conn, 'UTC')
     _migrate(conn, api_version)
+
+    set_timezone(conn, timezone)
 
     # Bind SQL -> Python casting functions.
     from nfldb.types import Clock, _Enum, Enums, FieldPosition, PossessionTime
     _bind_type(conn, 'game_phase', _Enum._pg_cast(Enums.game_phase))
     _bind_type(conn, 'season_phase', _Enum._pg_cast(Enums.season_phase))
     _bind_type(conn, 'game_day', _Enum._pg_cast(Enums.game_day))
-    _bind_type(conn, 'playerpos', _Enum._pg_cast(Enums.playerpos))
+    _bind_type(conn, 'player_pos', _Enum._pg_cast(Enums.player_pos))
+    _bind_type(conn, 'player_status', _Enum._pg_cast(Enums.player_status))
     _bind_type(conn, 'game_time', Clock._pg_cast)
     _bind_type(conn, 'pos_period', PossessionTime._pg_cast)
     _bind_type(conn, 'field_pos', FieldPosition._pg_cast)
@@ -98,13 +101,13 @@ def schema_version(conn):
     """
     with Tx(conn) as c:
         try:
-            c.execute('SELECT value FROM meta WHERE name = %s', ['version'])
+            c.execute('SELECT version FROM meta LIMIT 1', ['version'])
         except psycopg2.ProgrammingError:
             conn.rollback()
             return 0
         if c.rowcount == 0:
             return 0
-        return int(c.fetchone()['value'])
+        return c.fetchone()['version']
 
 
 def set_timezone(conn, timezone):
@@ -167,6 +170,12 @@ def _is_empty(conn):
 def _mogrify(cursor, xs):
     """Shortcut for mogrifying a list as if it were a tuple."""
     return cursor.mogrify('%s', (tuple(xs),))
+
+
+def _num_rows(cursor, table):
+    """Returns the number of rows in table."""
+    cursor.execute('SELECT COUNT(*) AS rowcount FROM %s' % table)
+    return cursor.fetchone()['rowcount']
 
 
 class Tx (object):
@@ -323,17 +332,25 @@ def _migrate(conn, to):
         with Tx(conn) as c:
             assert fname in globs, 'Migration function %d not defined.' % v
             globs[fname](c)
-            c.execute("UPDATE meta SET value = %s WHERE name = 'version'", [v])
+            c.execute("UPDATE meta SET version = %s", (v,))
 
 
 def _migrate_1(c):
     c.execute('''
+        CREATE DOMAIN utctime AS timestamp with time zone
+                          CHECK (EXTRACT(TIMEZONE FROM VALUE) = '0')
+    ''')
+    c.execute('''
         CREATE TABLE meta (
-            name varchar (255) PRIMARY KEY,
-            value varchar (1000) NOT NULL
+            version smallint,
+            last_roster_download utctime NOT NULL
         )
     ''')
-    c.execute("INSERT INTO meta (name, value) VALUES ('version', '1')")
+    c.execute('''
+        INSERT INTO meta
+            (version, last_roster_download)
+        VALUES (1, '0001-01-01T00:00:00Z')
+    ''')
 
 
 def _migrate_2(c):
@@ -358,10 +375,6 @@ def _migrate_2(c):
     ''')
 
     c.execute('''
-        CREATE DOMAIN utctime AS timestamp with time zone
-                          CHECK (EXTRACT(TIMEZONE FROM VALUE) = '0')
-    ''')
-    c.execute('''
         CREATE TYPE game_phase AS ENUM %s
     ''' % _mogrify(c, Enums.game_phase))
     c.execute('''
@@ -371,8 +384,11 @@ def _migrate_2(c):
         CREATE TYPE game_day AS ENUM %s
     ''' % _mogrify(c, Enums.game_day))
     c.execute('''
-        CREATE TYPE playerpos AS ENUM %s
-    ''' % _mogrify(c, Enums.playerpos))
+        CREATE TYPE player_pos AS ENUM %s
+    ''' % _mogrify(c, Enums.player_pos))
+    c.execute('''
+        CREATE TYPE player_status AS ENUM %s
+    ''' % _mogrify(c, Enums.player_status))
     c.execute('''
         CREATE TYPE game_time AS (
             phase game_phase,
@@ -402,18 +418,32 @@ def _migrate_2(c):
     c.execute('''
         INSERT INTO team (team_id, city, name) VALUES %s
     ''' % (', '.join(_mogrify(c, team[0:3]) for team in nflgame.teams)))
+    c.execute('''
+        INSERT INTO team (team_id, city, name) VALUES ('UNK', 'UNK', 'UNK')
+    ''')
 
     # Create the rest of the schema.
     c.execute('''
         CREATE TABLE player (
             player_id character varying (10) NOT NULL
                 CHECK (char_length(player_id) = 10),
-            gsis_name character varying (75) NOT NULL,
-            full_name character varying (75) NULL,
-            last_team character varying (3) NOT NULL,
-            position playerpos NULL,
+            gsis_name character varying (75) NULL,
+            full_name character varying (100) NULL,
+            first_name character varying (100) NULL,
+            last_name character varying (100) NULL,
+            team character varying (3) NOT NULL,
+            position player_pos NULL,
+            profile_id integer NULL,
+            profile_url character varying (255) NULL,
+            uniform_number usmallint NULL,
+            birthdate character varying (75) NULL,
+            college character varying (255) NULL,
+            height character varying (100) NULL,
+            weight character varying (100) NULL,
+            years_pro usmallint NULL,
+            status character varying (50) NULL,
             PRIMARY KEY (player_id),
-            FOREIGN KEY (last_team)
+            FOREIGN KEY (team)
                 REFERENCES team (team_id)
                 ON DELETE RESTRICT
                 ON UPDATE CASCADE
@@ -549,7 +579,7 @@ def _migrate_2(c):
     c.execute('''
         CREATE INDEX player_in_gsis_name ON player (gsis_name ASC);
         CREATE INDEX player_in_full_name ON player (full_name ASC);
-        CREATE INDEX player_in_last_team ON player (last_team ASC);
+        CREATE INDEX player_in_team ON player (team ASC);
         CREATE INDEX player_in_position ON player (position ASC);
     ''')
     c.execute('''

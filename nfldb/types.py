@@ -6,6 +6,7 @@ except ImportError:
     from ordereddict import OrderedDict
 from collections import defaultdict
 import datetime
+import itertools
 
 import enum
 
@@ -172,12 +173,22 @@ class Enums (object):
     on `Sunday`.
     """
 
-    playerpos = _Enum('playerpos',
-                      ['C', 'CB', 'DB', 'DE', 'DL', 'DT', 'FB', 'FS', 'G',
-                       'ILB', 'K', 'LB', 'LS', 'MLB', 'NT', 'OG', 'OL', 'OLB',
-                       'OT', 'P', 'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR'])
+    player_pos = _Enum('player_pos',
+                       ['C', 'CB', 'DB', 'DE', 'DL', 'DT', 'FB', 'FS', 'G',
+                        'ILB', 'K', 'LB', 'LS', 'MLB', 'NT', 'OG', 'OL', 'OLB',
+                        'OT', 'P', 'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR'])
     """
     The set of all possible player positions in abbreviated form.
+    """
+
+    player_status = _Enum('player_status',
+                          ['Active', 'InjuredReserve', 'NonFootballInjury',
+                           'Suspended', 'PUP', 'UnsignedDraftPick',
+                           'Exempt', 'Unknown'])
+    """
+    The current status of a player that is actively on a
+    roster. The statuses are taken from the key at the bottom of
+    http://goo.gl/HHsnjD
     """
 
     category_scope = _Enum('category_scope', ['play', 'player'])
@@ -232,6 +243,17 @@ class Enums (object):
     Maps a game day of the week in `nflgame` to a
     `nfldb.Enums.game_day`.
     """
+
+    _nflgame_player_status = {
+        'ACT': player_status.Active,
+        'RES': player_status.InjuredReserve,
+        'NON': player_status.NonFootballInjury,
+        'Suspended': player_status.Suspended,
+        'PUP': player_status.PUP,
+        'UDF': player_status.UnsignedDraftPick,
+        'EXE': player_status.Exempt,
+        # Everything else is `player_status.Unknown`
+    }
 
 
 class Team (object):
@@ -626,9 +648,29 @@ for cat in _player_categories.values():
 
 
 class Player (object):
-    __slots__ = ['player_id', 'gsis_name', 'full_name', 'last_team',
-                 'position',
+    """
+    A representation of an NFL player. Note that the representation
+    is inherently ephemeral; it always corresponds to the most recent
+    knowledge about a player.
+
+    Note that most of the fields in this object can have a `None`
+    value. This is because the source JSON data only guarantees that
+    a GSIS identifier and abbreviated name will be available. The rest
+    of the player meta data is scraped from NFL.com's team roster
+    pages (which invites infrequent uncertainty).
+    """
+    __slots__ = ['player_id', 'gsis_name', 'full_name', 'first_name',
+                 'last_name', 'team', 'position', 'profile_id', 'profile_url',
+                 'uniform_number', 'birthdate', 'college', 'height', 'weight',
+                 'years_pro', 'status',
                  ]
+
+    __existing = None
+    """
+    A cache of existing player ids in the database.
+    This is only used when saving data to detect if a player
+    needs to be added.
+    """
 
     @staticmethod
     def from_nflgame(p):
@@ -636,14 +678,48 @@ class Player (object):
         Given `p` as a `nflgame.player.PlayPlayerStats` object,
         `from_nflgame` converts `p` to a `nfldb.Player` object.
         """
-        full_name, position, team = None, None, p.team
+        meta = ['full_name', 'first_name', 'last_name', 'team', 'position',
+                'profile_id', 'profile_url', 'uniform_number', 'birthdate',
+                'college', 'height', 'weight', 'years_pro', 'status']
+        kwargs = {}
         if p.player is not None:
-            full_name = p.player.name
-            position = Enums.playerpos[p.player.position]
-            team = p.player.team
-        return Player(p.playerid, p.name, full_name, team, position)
+            for k in meta:
+                v = getattr(p.player, k, '')
+                if not v:
+                    v = None
+                kwargs[k] = v
 
-    def __init__(self, player_id, gsis_name, full_name, last_team, position):
+            # Convert position and status values to an enumeration.
+            if kwargs['position'] is not None:
+                kwargs['position'] = Enums.player_pos[kwargs['position']]
+            if kwargs['status'] is not None:
+                trans = Enums._nflgame_player_status
+                kwargs['status'] = trans.get(kwargs['status'],
+                                             Enums.player_status.Unknown)
+
+        # Explicitly say that the team of a player is unknown.
+        if kwargs.get('team', None) is None:
+            kwargs['team'] = 'UNK'
+        return Player(p.playerid, p.name, **kwargs)
+
+    @staticmethod
+    def from_nflgame_player(p):
+        """
+        Given `p` as a `nflgame.player.Player` object,
+        `from_nflgame_player` converts `p` to a `nfldb.Player` object.
+        """
+        class _Player (object):
+            def __init__(self):
+                self.playerid = p.player_id
+                self.name = p.gsis_name
+                self.player = p
+        return Player.from_nflgame(_Player())
+
+    def __init__(self, player_id, gsis_name, full_name=None, first_name=None,
+                 last_name=None, team=None, position=None, profile_id=None,
+                 profile_url=None, uniform_number=None, birthdate=None,
+                 college=None, height=None, weight=None, years_pro=None,
+                 status=None):
         """
         Introduces a new `nfldb.Player` object with the given
         attributes.
@@ -666,22 +742,45 @@ class Player (object):
         field is guaranteed to contain a name.
         """
         self.full_name = full_name
+        """The full name of a player."""
+        self.first_name = first_name
+        """The first name of a player."""
+        self.last_name = last_name
+        """The last name of a player."""
+        self.team = team
         """
-        The full name of a player if it's available. This may be
-        `None`.
-        """
-        self.last_team = last_team
-        """
-        The last known team that this player was associated with.
-        If the player is no longer active, then this will likely be
-        the team that the player last recorded a statistic with.
+        The team that the player is currently active on. If the player
+        is no longer playing or is a free agent, this value may
+        correspond to the `UNK` (unknown) team.
         """
         self.position = position
         """
         The current position of a player if it's available. This may
         be `None`. If it's not `None`, then it is represented by the
-        `nfldb.Enums.playerpos` enumeration.
+        `nfldb.Enums.player_pos` enumeration.
         """
+        self.profile_id = profile_id
+        """
+        The profile identifier used on a player's canonical NFL.com
+        profile page. This is used as a foreign key to connect varying
+        sources of information.
+        """
+        self.profile_url = profile_url
+        """The NFL.com profile URL for this player."""
+        self.uniform_number = uniform_number
+        """A player's uniform number as an integer."""
+        self.birthdate = birthdate
+        """A player's birth date as a free-form string."""
+        self.college = college
+        """A player's college as a free-form string."""
+        self.height = height
+        """A player's height as a free-form string."""
+        self.weight = weight
+        """A player's weight as a free-form string."""
+        self.years_pro = years_pro
+        """The number of years a player has played as an integer."""
+        self.status = status
+        """The current status of this player as a free-form string."""
 
     @property
     def _row(self):
@@ -689,13 +788,31 @@ class Player (object):
             ('player_id', self.player_id),
             ('gsis_name', self.gsis_name),
             ('full_name', self.full_name),
-            ('last_team', self.last_team),
+            ('first_name', self.first_name),
+            ('last_name', self.last_name),
+            ('team', self.team),
             ('position', self.position),
+            ('profile_id', self.profile_id),
+            ('profile_url', self.profile_url),
+            ('uniform_number', self.uniform_number),
+            ('birthdate', self.birthdate),
+            ('college', self.college),
+            ('height', self.height),
+            ('weight', self.weight),
+            ('years_pro', self.years_pro),
+            ('status', self.status),
         ]
 
     def _save(self, cursor):
-        vals = self._row
-        _upsert(cursor, 'player', vals, [vals[0]])
+        if Player.__existing is None:
+            Player.__existing = set()
+            cursor.execute('SELECT player_id FROM player')
+            for row in cursor.fetchall():
+                Player.__existing.add(row['player_id'])
+        if self.player_id not in Player.__existing:
+            vals = self._row
+            _upsert(cursor, 'player', vals, [vals[0]])
+            Player.__existing.add(self.player_id)
 
 
 class PlayPlayer (object):
@@ -804,6 +921,8 @@ class PlayPlayer (object):
     def _save(self, cursor):
         vals = self._row
         _upsert(cursor, 'play_player', vals, vals[0:4])
+        if self._player is not None:
+            self._player._save(cursor)
 
 
 class Play (object):
@@ -971,7 +1090,7 @@ class Play (object):
                   AND NOT (player_id = ANY (%s))
         ''', (self.gsis_id, self.drive_id, self.play_id,
               [p.player_id for p in self._play_players]))
-        for pp in self._play_players:
+        for pp in (self._play_players or []):
             pp._save(cursor)
 
 
@@ -1155,7 +1274,7 @@ class Drive (object):
             DELETE FROM play
             WHERE gsis_id = %s AND drive_id = %s AND NOT (play_id = ANY (%s))
         ''', (self.gsis_id, self.drive_id, [p.play_id for p in self._plays]))
-        for play in self._plays:
+        for play in (self._plays or []):
             play._save(cursor)
 
 
@@ -1211,6 +1330,29 @@ class Game (object):
         for drive in g.drives:
             game._drives.append(Drive.from_nflgame(game, drive))
         return game
+
+    @staticmethod
+    def from_schedule(db, s):
+        """
+        Converts a schedule dictionary from the `nflgame.schedule`
+        module to a bare-bones `nfldb.Game` object.
+        """
+        # This is about as evil as it gets. Duck typing to the MAX!
+        class _Game (object):
+            def __init__(self):
+                self.schedule = s
+                self.home, self.away = s['home'], s['away']
+                self.eid = s['eid']
+                self.gamekey = s['gamekey']
+                self.drives = []
+                self.game_over = lambda: False
+
+                zeroes = ['score_%s', 'score_%s_q1', 'score_%s_q2',
+                          'score_%s_q3', 'score_%s_q4', 'score_%s_q5']
+                for which, k in itertools.product(('home', 'away'), zeroes):
+                    setattr(self, k % which, 0)
+                self.data = {'home': {'to': 0}, 'away': {'to': 0}}
+        return Game.from_nflgame(db, _Game())
 
     def __init__(self, db, gsis_id, gamekey, start_time, week, day_of_week,
                  season_year, season_type, finished,
@@ -1370,7 +1512,7 @@ class Game (object):
             DELETE FROM drive
             WHERE gsis_id = %s AND NOT (drive_id = ANY (%s))
         ''', (self.gsis_id, [d.drive_id for d in self._drives]))
-        for drive in self._drives:
+        for drive in (self._drives or []):
             drive._save(cursor)
 
     def __str__(self):
