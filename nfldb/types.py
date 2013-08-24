@@ -715,6 +715,14 @@ class Player (object):
                 self.player = p
         return Player.from_nflgame(_Player())
 
+    @staticmethod
+    def from_row(r):
+        return Player(r['player_id'], r['gsis_name'], r['full_name'],
+                      r['first_name'], r['last_name'], r['team'],
+                      r['position'], r['profile_id'], r['profile_url'],
+                      r['uniform_number'], r['birthdate'], r['college'],
+                      r['height'], r['weight'], r['years_pro'], r['status'])
+
     def __init__(self, player_id, gsis_name, full_name=None, first_name=None,
                  last_name=None, team=None, position=None, profile_id=None,
                  profile_url=None, uniform_number=None, birthdate=None,
