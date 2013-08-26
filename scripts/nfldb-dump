@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# This script runs some boiler plate to get a correct SQL dump of the
+# nfldb database including the schema, indexes and data.
+# The key is making sure that the dump specifies the time zone as UTC.
+
+if [ $# != 1 ]; then
+  echo "Usage: $(basename $0) out-sql-file" >&2
+  exit 1
+fi
+
+pg_dump nfldb | sed "5iSET TIME ZONE 'UTC';" > "$1"
+
