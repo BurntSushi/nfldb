@@ -55,7 +55,7 @@ def connect(database=None, user=None, password=None, host=None, port=None,
         try:
             conf = toml.loads(open('config.toml').read())
         except:
-            print >> sys.stderr, "Invalid configuration file format."
+            print("Invalid configuration file format.", file=sys.stderr)
             sys.exit(1)
         database = conf['pgsql'].get('database', None)
         user = conf['pgsql'].get('user', None)
