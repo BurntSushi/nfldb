@@ -1093,7 +1093,7 @@ class Play (object):
 
         # Remove any "play players" that are stale.
         cursor.execute('''
-            DELETE FROM play_players
+            DELETE FROM play_player
             WHERE gsis_id = %s AND drive_id = %s AND play_id = %s
                   AND NOT (player_id = ANY (%s))
         ''', (self.gsis_id, self.drive_id, self.play_id,
