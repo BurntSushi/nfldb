@@ -3,69 +3,18 @@
 from __future__ import absolute_import, division, print_function
 import argparse
 from collections import defaultdict
+import subprocess
 import sys
 
 import nfldb
 
 import nflgame
 
-parser = argparse.ArgumentParser(
-    description='Updates the nfldb database. It may be run at any frequency, '
-                'or it may be run in the background with --background.',
-    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-aa = parser.add_argument
-args = parser.parse_args()
-
 
 def log(*args, **kwargs):
     kwargs['file'] = sys.stderr
     print(*args, **kwargs)
     sys.stderr.flush()
-
-
-def games_to_update(cursor):
-    """
-    Returns two lists of GSIS identifiers in the order in which they
-    are played.
-
-    The first list represents games that do not have any data in the
-    database.
-
-    The second list represents games that have partial play data,
-    but that the game is still in progress.
-
-    The lists are guranteed to have an empty intersection. Games that
-    are completed in the database will never appear in either of the
-    lists.
-
-    N.B. Games in the first list get bulk inserted. Drives/plays in
-    games from the second list need to be updated one-at-a-time.
-    """
-    has_drive, finished = set(), set()
-    cursor.execute('''
-        SELECT DISTINCT game.gsis_id, game.finished
-        FROM drive
-        LEFT JOIN game
-        ON drive.gsis_id = game.gsis_id
-    ''')
-    for row in cursor.fetchall():
-        has_drive.add(row['gsis_id'])
-        if row['finished']:
-            finished.add(row['gsis_id'])
-
-    nada, playing = [], []
-    unfinished = set(gsis_id
-                     for gsis_id in nflgame.schedule.games_byid
-                     if gsis_id not in finished)
-    # unfinished = set(['2012090904'])
-    for gsis_id in unfinished:
-        if gsis_id in has_drive:
-            playing.append(gsis_id)
-        else:
-            nada.append(gsis_id)
-
-    s = lambda xs: sorted(xs, key=int)
-    return s(nada), s(playing)
 
 
 def game_from_id(cursor, gsis_id):
@@ -79,27 +28,50 @@ def game_from_id(cursor, gsis_id):
     start_time = nfldb.types._nflgame_start_time(schedule)
     if (start_time - nfldb.now()).total_seconds() >= 900:
         # Bail quickly if the game isn't close to starting yet.
-        return nfldb.Game.from_schedule(cursor.connection, schedule)
+        return game_from_schedule(cursor, gsis_id)
 
     g = nflgame.game.Game(gsis_id)
     if g is None:  # Whoops. I guess the pregame hasn't started yet?
-        return nfldb.Game.from_schedule(cursor.connection, schedule)
+        return game_from_schedule(cursor, gsis_id)
     return nfldb.Game.from_nflgame(cursor.connection, g)
 
 
-def db_player_ids(cursor):
+def game_from_schedule(cursor, gsis_id):
     """
-    Returns a set of player identifiers currently in the database.
+    Returns an `nfldb.Game` object from schedule data in
+    `nflgame.schedule`.
+
+    This is useful when you want to avoid initializing a
+    `nflgame.game.Game` object.
     """
-    ids = set()
-    cursor.execute('SELECT player_id FROM player')
-    for row in cursor.fetchall():
-        ids.add(row['player_id'])
-    return ids
+    s = nflgame.schedule.games_byid[gsis_id]
+    return nfldb.Game.from_schedule(cursor.connection, s)
 
 
-def update_players(cursor):
-    if nfldb.db._num_rows(cursor, 'player') == 0:
+def update_players(cursor, interval):
+    cursor.execute('SELECT last_roster_download FROM meta')
+    last = cursor.fetchone()['last_roster_download']
+    update_due = (nfldb.now() - last).total_seconds() >= interval
+    num_existing = nfldb.db._num_rows(cursor, 'player')
+
+    # The interval only applies if the player table has data in it.
+    # If it's empty, we always want to try and update regardless of interval.
+    if not update_due and num_existing > 0:
+        return
+
+    log('Updating player JSON database... ')
+    cmd = ['nflgame-update-players', '--no-block']
+    try:
+        subprocess.check_call(cmd, stdout=sys.stdout, stderr=sys.stderr)
+    except subprocess.CalledProcessError as e:
+        log('`%s` failed (exit status %d)' % (' '.join(e.cmd), e.returncode))
+    except OSError as e:
+        log('`%s` failed [Errno %d]: %s'
+            % (' '.join(cmd), e.errno, e.strerror))
+    log('done.')
+
+    log('Updating %d players... ' % len(nflgame.players), end='')
+    if num_existing == 0:  # Fast path the initial insert.
         insert = []
         for p in nflgame.players.itervalues():
             insert.append(nfldb.Player.from_nflgame_player(p)._row)
@@ -108,39 +80,49 @@ def update_players(cursor):
         for p in nflgame.players.itervalues():
             vals = nfldb.Player.from_nflgame_player(p)._row
             nfldb.db._upsert(cursor, 'player', vals, [vals[0]])
+    log('done.')
+
+    # If the player table is empty at this point, then something is very
+    # wrong. The user MUST fix things before going forward.
+    if nfldb.db._num_rows(cursor, 'player') == 0:
+        log('Something is very wrong. The player table is empty even after\n'
+            'trying to update it. Please seek help. Include the output of\n'
+            'this program when asking for help.')
+        log('The likely cause here is that the `nflgame-update-players`\n'
+            'program is failing somehow. Try running it separately to see\n'
+            'if it succeeds on its own.')
+        sys.exit(1)
+
+    # Finally, report that we've just update the rosters.
+    cursor.execute('UPDATE meta SET last_roster_download = NOW()')
 
 
-def bulk_insert_games(cursor, gsis_ids):
-    # Some games may be *scheduled* in the database (i.e., no drives).
-    # For those games, we need to upsert on the game data and do a bulk
-    # insert for the rest. Otherwise, every game in `gsis_ids` does not
-    # have any data in the database.
-    scheduled = set()
-    cursor.execute('SELECT gsis_id FROM game WHERE finished = False')
-    for row in cursor.fetchall():
-        scheduled.add(row['gsis_id'])
-
-    bulk = defaultdict(list)
-
+def bulk_insert_game_data(cursor, scheduled):
+    """
+    Given a list of GSIS identifiers of games that have **only**
+    schedule data in the database, perform a bulk insert of all drives
+    and plays in the game.
+    """
     def do():
-        for table in ('game', 'drive', 'play', 'play_player'):  # order matters
+        log('\tSending batch of data to database...')
+        for table in ('drive', 'play', 'play_player'):  # order matters
             if len(bulk[table]) > 0:
                 nfldb.db._big_insert(cursor, table, bulk[table])
                 bulk[table] = []
 
-    players_indb = db_player_ids(cursor)
+    bulk = defaultdict(list)
     queued = 0
-    for gsis_id in gsis_ids:
-        if queued >= 100:
+    for gsis_id in scheduled:
+        if queued >= 150:
             do()
             queued = 0
-
         g = game_from_id(cursor, gsis_id)
-        if gsis_id in scheduled:
-            vals = g._row
-            nfldb.db._upsert(cursor, 'game', vals, [vals[0]])
-        else:
-            bulk['game'].append(g._row)
+        vals = g._row
+
+        # This updates the schedule data to include all game meta data.
+        # We don't use _save here, as that would recursively upsert all
+        # drive/play data in the game.
+        nfldb.db._upsert(cursor, 'game', vals, [vals[0]])
 
         queued += 1
         for drive in g.drives:
@@ -149,44 +131,183 @@ def bulk_insert_games(cursor, gsis_ids):
                 bulk['play'].append(play._row)
                 for pp in play.play_players:
                     # Whoops. Shouldn't happen often...
-                    if pp.player.player_id not in players_indb:
-                        pp.player._save(cursor)
+                    # Only inserts into the DB if the player wasn't found
+                    # in the JSON database. A few weird corner cases...
+                    pp.player._save(cursor)
                     bulk['play_player'].append(pp._row)
+
+    # Bulk insert leftovers.
     do()
 
 
-log('Connecting to nfldb... ', end='')
-db = nfldb.connect()
-log('done.')
+def games_in_progress(cursor):
+    """
+    Returns a list of GSIS identifiers corresponding to games that
+    are in progress. Namely, they are not finished but have at least
+    one drive in the database.
 
-# We always insert dates and times as UTC.
-log('Setting timezone to UTC... ', end='')
-nfldb.set_timezone(db, 'UTC')
-log('done.')
-
-# Lock all tables that the update script writes to. This is a hammer
-# meant to prevent race conditions if someone else is trying to update
-# the database at the same time.
-#
-# The lock used is a write lock; so other clients can still read from
-# the tables during an update.
-#
-# The locks are not released until this program quits.
-with nfldb.Tx(db) as cursor:
-    log('Locking write access to tables... ', end='')
+    The list is sorted in the order in which the games will be played.
+    """
+    playing = []
     cursor.execute('''
-        LOCK TABLE player IN SHARE ROW EXCLUSIVE MODE;
-        LOCK TABLE game IN SHARE ROW EXCLUSIVE MODE;
-        LOCK TABLE drive IN SHARE ROW EXCLUSIVE MODE;
-        LOCK TABLE play IN SHARE ROW EXCLUSIVE MODE;
-        LOCK TABLE play_player IN SHARE ROW EXCLUSIVE MODE
+        SELECT DISTINCT game.gsis_id, game.finished
+        FROM drive
+        LEFT JOIN game
+        ON drive.gsis_id = game.gsis_id
+        WHERE game.finished = False AND drive.drive_id IS NOT NULL
     ''')
+    for row in cursor.fetchall():
+        playing.append(row['gsis_id'])
+    return sorted(playing, key=int)
+
+
+def games_scheduled(cursor):
+    """
+    Returns a list of GSIS identifiers corresponding to games that
+    have schedule data in the database but don't have any drives or
+    plays in the database. In the typical case, this corresponds to
+    games that haven't started yet.
+
+    The list is sorted in the order in which the games will be played.
+    """
+    scheduled = []
+    cursor.execute('''
+        SELECT DISTINCT game.gsis_id, game.start_time
+        FROM game
+        LEFT JOIN drive
+        ON game.gsis_id = drive.gsis_id
+        WHERE drive.drive_id IS NULL
+    ''')
+    for row in cursor.fetchall():
+        if (row['start_time'] - nfldb.now()).total_seconds() < 900:
+            scheduled.append(row['gsis_id'])
+    return sorted(scheduled, key=int)
+
+
+def games_missing(cursor):
+    """
+    Returns a list of GSIS identifiers corresponding to games that
+    don't have any data in the database.
+
+    The list is sorted in the order in which the games will be played.
+    """
+    allids = set()
+    cursor.execute('SELECT gsis_id FROM game')
+    for row in cursor.fetchall():
+        allids.add(row['gsis_id'])
+    nada = (gid for gid in nflgame.schedule.games_byid if gid not in allids)
+    return sorted(nada, key=int)
+
+
+def update(db, player_interval=(60 * 60 * 12)):
+    """
+    Does a single monolithic update of players, games, drives and
+    plays.  If `update` terminates, then the database will be
+    completely up to date with all current NFL data known by `nflgame`.
+
+    Note that while `update` is executing, all writes to the following
+    tables will be blocked: player, game, drive, play, play_player.
+    The huge lock is used so that there aren't any races introduced
+    when updating the database. Other clients will still be able to
+    read from the database.
+    """
+    # The complexity of this function has one obvious culprit:
+    # performance reasons. On the one hand, we want to make infrequent
+    # updates quick by bulk-inserting game, drive and play data. On the
+    # other hand, we need to be able to support incremental updates
+    # as games are played.
+    #
+    # Therefore, games and their data are split up into three chunks.
+    #
+    # The first chunk are games that don't exist in the database at all.
+    # The games have their *schedule* data bulk-inserted as a place holder
+    # in the `game` table. This results in all of the `home_*` and `away_*`
+    # fields being set to 0. The schedule data is bulk inserted without
+    # ever initializing a `nflgame.game.Game` object, which can be costly.
+    #
+    # The second chunk are games that have schedule data in the database
+    # but have nothing else. In the real world, this corresponds to games
+    # in the current season that haven't started yet. Or more usefully,
+    # every game when the database is empty. This chunk of games has its
+    # drives and play bulk-inserted.
+    #
+    # The third and final chunk are games that are being played. These games
+    # have the slowest update procedure since each drive and play need to be
+    # "upserted." That is, inserted if it doesn't exist or updated if it
+    # does. On the scale of a few games, performance should be reasonable.
+    # (Data needs to be updated because mistakes can be made on the fly and
+    # corrected by the NFL. Blech.)
+    #
+    # Comparatively, updating players is pretty simple. Player meta data
+    # changes infrequently, which means we can update it on a larger interval
+    # and we can be less careful about performance.
+    with nfldb.Tx(db) as cursor:
+        log('-' * 79)
+        log('STARTING NFLDB UPDATE AT %s' % nfldb.now())
+
+        log('Locking write access to tables... ', end='')
+        cursor.execute('''
+            LOCK TABLE player IN SHARE ROW EXCLUSIVE MODE;
+            LOCK TABLE game IN SHARE ROW EXCLUSIVE MODE;
+            LOCK TABLE drive IN SHARE ROW EXCLUSIVE MODE;
+            LOCK TABLE play IN SHARE ROW EXCLUSIVE MODE;
+            LOCK TABLE play_player IN SHARE ROW EXCLUSIVE MODE
+        ''')
+        log('done.')
+
+        # Try to update players first to avoid upserting them.
+        update_players(cursor, player_interval)
+
+        nada = games_missing(cursor)
+        if len(nada) > 0:
+            log('Adding schedule data for %d games... ' % len(nada), end='')
+            insert = []
+            for gid in nada:
+                g = game_from_schedule(cursor, gid)
+                insert.append(g._row)
+            nfldb.db._big_insert(cursor, 'game', insert)
+            log('done.')
+
+        scheduled = games_scheduled(cursor)
+        if len(scheduled) > 0:
+            log('Bulk inserting data for %d games...' % len(scheduled))
+            bulk_insert_game_data(cursor, scheduled)
+            log('done.')
+
+        playing = games_in_progress(cursor)
+        if len(playing) > 0:
+            log('Updating %d games in progress...' % len(playing))
+            for gid in playing:
+                g = game_from_id(cursor, gid)
+                log('\t%s' % g)
+                g._save(cursor)
+            log('done.')
+
+        log('FINISHED NFLDB UPDATE AT %s' % nfldb.now())
+        log('-' * 79)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Updates the nfldb database. It may be run at any '
+                    'frequency, or it may be run in the background with '
+                    '--background.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    aa = parser.add_argument
+    aa('--player-interval', type=int, default=(60 * 60 * 12),
+       help='The number of seconds between player meta data updates. A longer '
+            'interval is needed since meta data does not change frequently '
+            'and because each update requires a few dozen HTTP requests to '
+            'NFL.com.')
+    args = parser.parse_args()
+
+    log('Connecting to nfldb... ', end='')
+    db = nfldb.connect()
     log('done.')
 
-with nfldb.Tx(db) as cursor:
-    log('Updating players... ', end='')
-    update_players(cursor)
+    # We always insert dates and times as UTC.
+    log('Setting timezone to UTC... ', end='')
+    nfldb.set_timezone(db, 'UTC')
     log('done.')
 
-    nada, playing = games_to_update(cursor)
-    bulk_insert_games(cursor, nada)
+    update(db, player_interval=args.player_interval)
