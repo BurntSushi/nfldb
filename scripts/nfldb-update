@@ -179,6 +179,19 @@ def games_scheduled(cursor):
         WHERE drive.drive_id IS NULL
     ''')
     for row in cursor.fetchall():
+        # This condition guards against unnecessarily processing games
+        # that have only schedule data but aren't even close to starting yet.
+        # Namely, if a game doesn't have any drives, then there's nothing to
+        # bulk insert.
+        #
+        # We start looking at games when it's 15 minutes before game time.
+        # Eventually, the game will start, and the first bits of drive/play
+        # data will be bulk inserted. On the next database update, the game
+        # will move to the `games_in_progress` list and updated incrementally.
+        #
+        # So what's the point of bulk inserting? It's useful when updates are
+        # done infrequently (like the initial load of the database or say,
+        # once a week).
         if (row['start_time'] - nfldb.now()).total_seconds() < 900:
             scheduled.append(row['gsis_id'])
     return sorted(scheduled, key=int)
