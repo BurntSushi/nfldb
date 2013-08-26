@@ -1,1 +1,1 @@
-au BufWritePost *.py silent !ctags -R
+au BufWritePost *.py silent !ctags -R --languages=python
