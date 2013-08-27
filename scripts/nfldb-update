@@ -59,7 +59,7 @@ def update_players(cursor, interval):
     if not update_due and num_existing > 0:
         return
 
-    log('Updating player JSON database... ')
+    log('Updating player JSON database... (last update was %s)' % last)
     cmd = ['nflgame-update-players', '--no-block']
     try:
         subprocess.check_call(cmd, stdout=sys.stdout, stderr=sys.stderr)
