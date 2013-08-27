@@ -441,7 +441,7 @@ def _migrate_2(c):
             height character varying (100) NULL,
             weight character varying (100) NULL,
             years_pro usmallint NULL,
-            status character varying (50) NULL,
+            status player_status NOT NULL,
             PRIMARY KEY (player_id),
             FOREIGN KEY (team)
                 REFERENCES team (team_id)

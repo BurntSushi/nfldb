@@ -696,6 +696,8 @@ class Player (object):
                 trans = Enums._nflgame_player_status
                 kwargs['status'] = trans.get(kwargs['status'],
                                              Enums.player_status.Unknown)
+        if kwargs.get('status', None) is None:
+            kwargs['status'] = Enums.player_status.Unknown
 
         # Explicitly say that the team of a player is unknown.
         if kwargs.get('team', None) is None:
