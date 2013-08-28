@@ -378,6 +378,8 @@ class FieldPosition (object):
 
     @staticmethod
     def _pg_cast(sqlv, cursor):
+        if not sqlv:
+            return FieldPosition(None)
         return FieldPosition(int(sqlv[1:-1]))
 
     def __init__(self, offset):
