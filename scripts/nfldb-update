@@ -65,9 +65,11 @@ def update_players(cursor, interval):
         subprocess.check_call(cmd, stdout=sys.stdout, stderr=sys.stderr)
     except subprocess.CalledProcessError as e:
         log('`%s` failed (exit status %d)' % (' '.join(e.cmd), e.returncode))
+        return
     except OSError as e:
         log('`%s` failed [Errno %d]: %s'
             % (' '.join(cmd), e.errno, e.strerror))
+        return
     log('done.')
 
     log('Updating %d players... ' % len(nflgame.players), end='')
