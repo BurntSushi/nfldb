@@ -286,10 +286,10 @@ class Team (object):
     def __init__(self, db, abbr):
         """
         Introduces a new team given its standard abbreviation and a
-        database connection.
+        database connection. The database connection is used to
+        retrieve other team information if it isn't cached already.
 
-        Note that since team data is small, it is cached to a
-        particular database connection.
+        Note that since team data is small, it is cached.
         """
         if hasattr(self, 'team_id'):
             # Loaded from cache.
