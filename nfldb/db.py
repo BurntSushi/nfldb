@@ -584,6 +584,11 @@ def _migrate_2(c):
     ''')
     c.execute('''
         CREATE INDEX game_in_gamekey ON game (gamekey ASC);
+        CREATE INDEX game_in_start_time ON game (start_time ASC);
+        CREATE INDEX game_in_week ON game (week ASC);
+        CREATE INDEX game_in_day_of_week ON game (day_of_week ASC);
+        CREATE INDEX game_in_season_year ON game (season_year ASC);
+        CREATE INDEX game_in_season_type ON game (season_type ASC);
         CREATE INDEX game_in_finished ON game (finished ASC);
         CREATE INDEX game_in_home_team ON game (home_team ASC);
         CREATE INDEX game_in_away_team ON game (away_team ASC);
