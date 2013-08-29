@@ -120,6 +120,19 @@ def _next_play_with_time(plays, play):
     return None
 
 
+def _as_row(fields, obj):
+    """
+    Given a list of fields in a SQL table and a Python object, return
+    an association list where the keys are from `fields` and the values
+    are the result of `getattr(obj, fields[i], None)` for some `i`.
+
+    Note that the `time_inserted` and `time_updated` fields are always
+    omitted.
+    """
+    exclude = ('time_inserted', 'time_updated')
+    return [(f, getattr(obj, f, None)) for f in fields if f not in exclude]
+
+
 class _Enum (enum.Enum):
     """
     Conforms to the `getquoted` interface in psycopg2.
@@ -661,11 +674,13 @@ class Player (object):
     of the player meta data is scraped from NFL.com's team roster
     pages (which invites infrequent uncertainty).
     """
-    __slots__ = ['player_id', 'gsis_name', 'full_name', 'first_name',
-                 'last_name', 'team', 'position', 'profile_id', 'profile_url',
-                 'uniform_number', 'birthdate', 'college', 'height', 'weight',
-                 'years_pro', 'status',
-                 ]
+    _sql_fields = ['player_id', 'gsis_name', 'full_name', 'first_name',
+                   'last_name', 'team', 'position', 'profile_id',
+                   'profile_url', 'uniform_number', 'birthdate', 'college',
+                   'height', 'weight', 'years_pro', 'status',
+                   ]
+
+    __slots__ = _sql_fields
 
     __existing = None
     """
@@ -796,24 +811,7 @@ class Player (object):
 
     @property
     def _row(self):
-        return [
-            ('player_id', self.player_id),
-            ('gsis_name', self.gsis_name),
-            ('full_name', self.full_name),
-            ('first_name', self.first_name),
-            ('last_name', self.last_name),
-            ('team', self.team),
-            ('position', self.position),
-            ('profile_id', self.profile_id),
-            ('profile_url', self.profile_url),
-            ('uniform_number', self.uniform_number),
-            ('birthdate', self.birthdate),
-            ('college', self.college),
-            ('height', self.height),
-            ('weight', self.weight),
-            ('years_pro', self.years_pro),
-            ('status', self.status),
-        ]
+        return _as_row(Player._sql_fields, self)
 
     def _save(self, cursor):
         if Player.__existing is None:
@@ -828,10 +826,11 @@ class Player (object):
 
 
 class PlayPlayer (object):
-    __slots__ = (_player_categories.keys()
-                 + ['gsis_id', 'drive_id', 'play_id', 'player_id',
-                    '_play', '_player']
-                 )
+    _sql_fields = (_player_categories.keys()
+                   + ['gsis_id', 'drive_id', 'play_id', 'player_id']
+                   )
+
+    __slots__ = _sql_fields + ['_play', '_player']
 
     @staticmethod
     def from_nflgame(p, pp):
@@ -920,15 +919,7 @@ class PlayPlayer (object):
 
     @property
     def _row(self):
-        vals = [
-            ('gsis_id', self.gsis_id),
-            ('drive_id', self.drive_id),
-            ('play_id', self.play_id),
-            ('player_id', self.player_id),
-        ]
-        for cat in _player_categories:
-            vals.append((cat, getattr(self, cat, None)))
-        return vals
+        return _as_row(PlayPlayer._sql_fields, self)
 
     def _save(self, cursor):
         vals = self._row
@@ -938,12 +929,14 @@ class PlayPlayer (object):
 
 
 class Play (object):
-    __slots__ = (_play_categories.keys()
-                 + ['gsis_id', 'drive_id', 'play_id', 'time', 'pos_team',
-                    'yardline', 'down', 'yards_to_go', 'description', 'note',
-                    'time_inserted', 'time_updated',
-                    '_drive', '_play_players']
-                 )
+    _sql_fields = (_play_categories.keys()
+                   + ['gsis_id', 'drive_id', 'play_id', 'time', 'pos_team',
+                      'yardline', 'down', 'yards_to_go', 'description', 'note',
+                      'time_inserted', 'time_updated',
+                      ]
+                   )
+
+    __slots__ = _sql_fields + ['_drive', '_play_players']
 
     @staticmethod
     def from_nflgame(d, p):
@@ -1075,21 +1068,7 @@ class Play (object):
 
     @property
     def _row(self):
-        vals = [
-            ('gsis_id', self.gsis_id),
-            ('drive_id', self.drive_id),
-            ('play_id', self.play_id),
-            ('time', self.time),
-            ('pos_team', self.pos_team),
-            ('yardline', self.yardline),
-            ('down', self.down),
-            ('yards_to_go', self.yards_to_go),
-            ('description', self.description),
-            ('note', self.note),
-        ]
-        for cat in _play_categories:
-            vals.append((cat, getattr(self, cat, None)))
-        return vals
+        return _as_row(Play._sql_fields, self)
 
     def _save(self, cursor):
         vals = self._row
@@ -1107,13 +1086,14 @@ class Play (object):
 
 
 class Drive (object):
-    __slots__ = ['gsis_id', 'drive_id', 'start_field', 'start_time',
-                 'end_field', 'end_time', 'pos_team', 'pos_time',
-                 'first_downs', 'result', 'penalty_yards', 'yards_gained',
-                 'play_count',
-                 'time_inserted', 'time_updated',
-                 '_game', '_plays',
-                 ]
+    _sql_fields = ['gsis_id', 'drive_id', 'start_field', 'start_time',
+                   'end_field', 'end_time', 'pos_team', 'pos_time',
+                   'first_downs', 'result', 'penalty_yards', 'yards_gained',
+                   'play_count',
+                   'time_inserted', 'time_updated',
+                   ]
+
+    __slots__ = _sql_fields + ['_game', '_plays']
 
     @staticmethod
     def from_nflgame(g, d):
@@ -1261,21 +1241,7 @@ class Drive (object):
 
     @property
     def _row(self):
-        return [
-            ('gsis_id', self.game.gsis_id),
-            ('drive_id', self.drive_id),
-            ('start_field', self.start_field),
-            ('start_time', self.start_time),
-            ('end_field', self.end_field),
-            ('end_time', self.end_time),
-            ('pos_team', self.pos_team),
-            ('pos_time', self.pos_time),
-            ('first_downs', self.first_downs),
-            ('result', self.result),
-            ('penalty_yards', self.penalty_yards),
-            ('yards_gained', self.yards_gained),
-            ('play_count', self.play_count),
-        ]
+        return _as_row(Drive._sql_fields, self)
 
     def _save(self, cursor):
         vals = self._row
@@ -1291,18 +1257,17 @@ class Drive (object):
 
 
 class Game (object):
-    __slots__ = ['gsis_id', 'gamekey', 'start_time', 'week', 'day_of_week',
-                 'season_year', 'season_type', 'finished',
-                 'home_team', 'home_score', 'home_score_q1', 'home_score_q2',
-                 'home_score_q3', 'home_score_q4', 'home_score_q5',
-                 'home_turnovers',
-                 'away_team', 'away_score', 'away_score_q1', 'away_score_q2',
-                 'away_score_q3', 'away_score_q4', 'away_score_q5',
-                 'away_turnovers',
-                 'time_inserted', 'time_updated',
-                 'db',
-                 '_drives',
-                 ]
+    _sql_fields = ['gsis_id', 'gamekey', 'start_time', 'week', 'day_of_week',
+                   'season_year', 'season_type', 'finished',
+                   'home_team', 'home_score', 'home_score_q1', 'home_score_q2',
+                   'home_score_q3', 'home_score_q4', 'home_score_q5',
+                   'home_turnovers',
+                   'away_team', 'away_score', 'away_score_q1', 'away_score_q2',
+                   'away_score_q3', 'away_score_q4', 'away_score_q5',
+                   'away_turnovers',
+                   'time_inserted', 'time_updated']
+
+    __slots__ = _sql_fields + ['db', '_drives']
 
     @staticmethod
     def from_nflgame(db, g):
@@ -1365,6 +1330,10 @@ class Game (object):
                     setattr(self, k % which, 0)
                 self.data = {'home': {'to': 0}, 'away': {'to': 0}}
         return Game.from_nflgame(db, _Game())
+
+    @staticmethod
+    def from_row(db, row):
+        return Game(db, **row)
 
     def __init__(self, db, gsis_id, gamekey, start_time, week, day_of_week,
                  season_year, season_type, finished,
@@ -1488,32 +1457,7 @@ class Game (object):
 
     @property
     def _row(self):
-        return [
-            ('gsis_id', self.gsis_id),
-            ('gamekey', self.gamekey),
-            ('start_time', self.start_time),
-            ('week', self.week),
-            ('day_of_week', self.day_of_week),
-            ('season_year', self.season_year),
-            ('season_type', self.season_type),
-            ('finished', self.finished),
-            ('home_team', self.home_team),
-            ('home_score', self.home_score),
-            ('home_score_q1', self.home_score_q1),
-            ('home_score_q2', self.home_score_q2),
-            ('home_score_q3', self.home_score_q3),
-            ('home_score_q4', self.home_score_q4),
-            ('home_score_q5', self.home_score_q5),
-            ('home_turnovers', self.home_turnovers),
-            ('away_team', self.away_team),
-            ('away_score', self.away_score),
-            ('away_score_q1', self.away_score_q1),
-            ('away_score_q2', self.away_score_q2),
-            ('away_score_q3', self.away_score_q3),
-            ('away_score_q4', self.away_score_q4),
-            ('away_score_q5', self.away_score_q5),
-            ('away_turnovers', self.away_turnovers),
-        ]
+        return _as_row(Game._sql_fields, self)
 
     def _save(self, cursor):
         vals = self._row
