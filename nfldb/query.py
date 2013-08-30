@@ -247,7 +247,7 @@ class Query (Condition):
         with Tx(self._db) as cursor:
             ids = self._ids(cursor, 'drive')
             q = 'SELECT %s FROM drive WHERE %s' \
-                % (_select_fields('drive', types.Game._sql_fields),
+                % (_select_fields('drive', types.Drive._sql_fields),
                    _sql_pkey_in(cursor, ['gsis_id', 'drive_id'], ids['drive']))
             cursor.execute(q)
 
@@ -379,27 +379,28 @@ class Query (Condition):
 
         # Finally filter by player.
         if 'player' in tables:
-            player = set()
-            cur.execute(
-                'SELECT player_id FROM player %s'
-                % _prefix_or_empty('WHERE ', self._sql_where(cur, ['player'])))
-            for row in cur.fetchall():
-                player.add(row['player_id'])
-
             # Cut down the game/drive/play ids to only what the players
             # participated in.
-            conds = [pkin(['player_id'], player)]
+            conds = []
             if game is not None:
-                conds.append(pkin(['gsis_id'], game))
+                conds.append(pkin(['gsis_id'], game, prefix='play_player.'))
             if drive is not None:
-                conds.append(pkin(['gsis_id', 'drive_id'], drive))
+                conds.append(pkin(['gsis_id', 'drive_id'], drive,
+                                  prefix='play_player.'))
             if play is not None:
-                conds.append(pkin(['gsis_id', 'drive_id', 'play_id'], play))
+                conds.append(pkin(['gsis_id', 'drive_id', 'play_id'], play,
+                                  prefix='play_player.'))
 
+            where = _prefix_or_empty(' AND ', self._sql_where(cur, ['player']))
             cur.execute('''
-                SELECT gsis_id, drive_id, play_id, player_id FROM play_player
-                WHERE %s
-            ''' % (' AND '.join(conds)))
+                SELECT
+                    play_player.gsis_id, play_player.drive_id,
+                    play_player.play_id, play_player.player_id
+                FROM play_player
+                LEFT JOIN player
+                ON play_player.player_id = player.player_id
+                WHERE %s %s
+            ''' % (' AND '.join(conds), where))
 
             game, drive, play, player = set(), set(), set(), set()
             for row in cur.fetchall():
