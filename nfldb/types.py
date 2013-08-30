@@ -145,6 +145,10 @@ class _Enum (enum.Enum):
         corresponding to `enum`. Namely, `enum` should be a member of
         `nfldb.Enums`.
         """
+        # def _(sqlv, t): 
+            # print(enum, sqlv) 
+            # return enum[sqlv] 
+        # return _ 
         return lambda sqlv, _: enum[sqlv]
 
     def __conform__(self, proto):
@@ -189,7 +193,8 @@ class Enums (object):
     player_pos = _Enum('player_pos',
                        ['C', 'CB', 'DB', 'DE', 'DL', 'DT', 'FB', 'FS', 'G',
                         'ILB', 'K', 'LB', 'LS', 'MLB', 'NT', 'OG', 'OL', 'OLB',
-                        'OT', 'P', 'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR'])
+                        'OT', 'P', 'QB', 'RB', 'SAF', 'SS', 'T', 'TE', 'WR',
+                        'UNK'])
     """
     The set of all possible player positions in abbreviated form.
     """
@@ -366,7 +371,8 @@ class Category (object):
         The SQL definition of this column.
         """
         typ = 'real' if self.is_real else 'smallint'
-        return '%s %s NULL' % (self.category_id, typ)
+        default = '0.0' if self.is_real else '0'
+        return '%s %s NOT NULL DEFAULT %s' % (self.category_id, typ, default)
 
     def __str__(self):
         return self.category_id
@@ -680,7 +686,7 @@ class Player (object):
                    'height', 'weight', 'years_pro', 'status',
                    ]
 
-    __slots__ = _sql_fields
+    __slots__ = _sql_fields + ['_db']
 
     __existing = None
     """
@@ -690,7 +696,7 @@ class Player (object):
     """
 
     @staticmethod
-    def from_nflgame(p):
+    def from_nflgame(db, p):
         """
         Given `p` as a `nflgame.player.PlayPlayerStats` object,
         `from_nflgame` converts `p` to a `nfldb.Player` object.
@@ -707,22 +713,22 @@ class Player (object):
                 kwargs[k] = v
 
             # Convert position and status values to an enumeration.
-            if kwargs['position'] is not None:
-                kwargs['position'] = Enums.player_pos[kwargs['position']]
-            if kwargs['status'] is not None:
-                trans = Enums._nflgame_player_status
-                kwargs['status'] = trans.get(kwargs['status'],
-                                             Enums.player_status.Unknown)
+            kwargs['position'] = getattr(Enums.player_pos, kwargs['position'],
+                                         Enums.player_pos.UNK)
+
+            trans = Enums._nflgame_player_status
+            kwargs['status'] = trans.get(kwargs['status'],
+                                         Enums.player_status.Unknown)
         if kwargs.get('status', None) is None:
             kwargs['status'] = Enums.player_status.Unknown
 
         # Explicitly say that the team of a player is unknown.
         if kwargs.get('team', None) is None:
             kwargs['team'] = 'UNK'
-        return Player(p.playerid, p.name, **kwargs)
+        return Player(db, p.playerid, p.name, **kwargs)
 
     @staticmethod
-    def from_nflgame_player(p):
+    def from_nflgame_player(db, p):
         """
         Given `p` as a `nflgame.player.Player` object,
         `from_nflgame_player` converts `p` to a `nfldb.Player` object.
@@ -732,21 +738,21 @@ class Player (object):
                 self.playerid = p.player_id
                 self.name = p.gsis_name
                 self.player = p
-        return Player.from_nflgame(_Player())
+        return Player.from_nflgame(db, _Player())
 
     @staticmethod
-    def from_row(r):
-        return Player(r['player_id'], r['gsis_name'], r['full_name'],
+    def from_row(db, r):
+        return Player(db, r['player_id'], r['gsis_name'], r['full_name'],
                       r['first_name'], r['last_name'], r['team'],
                       r['position'], r['profile_id'], r['profile_url'],
                       r['uniform_number'], r['birthdate'], r['college'],
                       r['height'], r['weight'], r['years_pro'], r['status'])
 
-    def __init__(self, player_id, gsis_name, full_name=None, first_name=None,
-                 last_name=None, team=None, position=None, profile_id=None,
-                 profile_url=None, uniform_number=None, birthdate=None,
-                 college=None, height=None, weight=None, years_pro=None,
-                 status=None):
+    def __init__(self, db, player_id, gsis_name, full_name=None,
+                 first_name=None, last_name=None, team=None, position=None,
+                 profile_id=None, profile_url=None, uniform_number=None,
+                 birthdate=None, college=None, height=None, weight=None,
+                 years_pro=None, status=None):
         """
         Introduces a new `nfldb.Player` object with the given
         attributes.
@@ -756,6 +762,8 @@ class Player (object):
         statistical data related to a player at some particular point
         in time.
         """
+        self._db = db
+
         self.player_id = player_id
         """
         The player_id linking this object `nfldb.PlayPlayer` object.
@@ -783,8 +791,8 @@ class Player (object):
         self.position = position
         """
         The current position of a player if it's available. This may
-        be `None`. If it's not `None`, then it is represented by the
-        `nfldb.Enums.player_pos` enumeration.
+        be **not** be `None`. If the position is not known, then the
+        `UNK` enum is used from `nfldb.Enums.player_pos`.
         """
         self.profile_id = profile_id
         """
@@ -826,14 +834,15 @@ class Player (object):
 
 
 class PlayPlayer (object):
-    _sql_fields = (_player_categories.keys()
-                   + ['gsis_id', 'drive_id', 'play_id', 'player_id']
+    _sql_fields = (['gsis_id', 'drive_id', 'play_id', 'player_id',
+                    'team']
+                   + _player_categories.keys()
                    )
 
-    __slots__ = _sql_fields + ['_play', '_player']
+    __slots__ = _sql_fields + ['_db', '_play', '_player']
 
     @staticmethod
-    def from_nflgame(p, pp):
+    def from_nflgame(db, p, pp):
         """
         Given `p` as a `nfldb.Play` object and `pp` as a
         `nflgame.player.PlayPlayerStats` object, `from_nflgame`
@@ -841,15 +850,25 @@ class PlayPlayer (object):
         """
         stats = {}
         for k in _player_categories:
-            if k in pp._stats:
-                stats[k] = pp._stats[k]
+            stats[k] = pp._stats.get(k, 0)
 
-        play_player = PlayPlayer(p, p.gsis_id, p.drive_id, p.play_id,
-                                 pp.playerid, stats)
-        play_player._player = Player.from_nflgame(pp)
+        team = nflgame.standard_team(pp.team)
+        play_player = PlayPlayer(db, p.gsis_id, p.drive_id, p.play_id,
+                                 pp.playerid, team, stats)
+        play_player._play = p
+        play_player._player = Player.from_nflgame(db, pp)
         return play_player
 
-    def __init__(self, play, gsis_id, drive_id, play_id, player_id, stats):
+    @staticmethod
+    def from_row(db, row):
+        stats = {}
+        for cat in _player_categories:
+            stats[cat] = row.get(cat, 0)
+        return PlayPlayer(db, row['gsis_id'], row['drive_id'],
+                          row['play_id'], row['player_id'], row['team'], stats)
+
+    def __init__(self, db, gsis_id, drive_id, play_id, player_id, team,
+                 stats):
         """
         Introduces a new `nfldb.PlayPlayer` object. A "play player"
         is a statistical grouping of categories for a single player
@@ -863,8 +882,9 @@ class PlayPlayer (object):
         Each `nfldb.PlayPlayer` object belongs to exactly one
         `nfldb.Play` and exactly one `nfldb.Player`.
         """
-        self._play = play
+        self._play = None
         self._player = None
+        self._db = db
 
         self.gsis_id = gsis_id
         """
@@ -891,10 +911,14 @@ class PlayPlayer (object):
         N.B. This is the GSIS identifier string. It always has length
         10.
         """
+        self.team = team
+        """
+        The team that this player belonged to when he recorded the
+        statistics in this play.
+        """
         # Extract the relevant statistical categories only.
-        for cat in stats:
-            if cat in _player_categories:
-                setattr(self, cat, stats[cat])
+        for cat in _player_categories:
+            setattr(self, cat, stats.get(cat, 0))
 
     @property
     def play(self):
@@ -929,17 +953,16 @@ class PlayPlayer (object):
 
 
 class Play (object):
-    _sql_fields = (_play_categories.keys()
-                   + ['gsis_id', 'drive_id', 'play_id', 'time', 'pos_team',
-                      'yardline', 'down', 'yards_to_go', 'description', 'note',
-                      'time_inserted', 'time_updated',
-                      ]
+    _sql_fields = (['gsis_id', 'drive_id', 'play_id', 'time', 'pos_team',
+                    'yardline', 'down', 'yards_to_go', 'description', 'note',
+                    'time_inserted', 'time_updated',
+                    ] + _play_categories.keys()
                    )
 
-    __slots__ = _sql_fields + ['_drive', '_play_players']
+    __slots__ = _sql_fields + ['_db', '_drive', '_play_players']
 
     @staticmethod
-    def from_nflgame(d, p):
+    def from_nflgame(db, d, p):
         """
         Given `d` as a `nfldb.Drive` object and `p` as a
         `nflgame.game.Play` object, `from_nflgame` converts `p` to a
@@ -947,8 +970,7 @@ class Play (object):
         """
         stats = {}
         for k in _play_categories:
-            if k in p._stats:
-                stats[k] = p._stats[k]
+            stats[k] = p._stats.get(k, 0)
 
         # Fix up some fields so they meet the constraints of the schema.
         # The `time` field is cleaned up afterwards in
@@ -958,15 +980,27 @@ class Play (object):
         yardline = FieldPosition(getattr(p.yardline, 'offset', None))
         down = p.down if 1 <= p.down <= 4 else None
         team = p.team if p.team is not None and len(p.team) > 0 else None
-        play = Play(d, d.gsis_id, d.drive_id, int(p.playid), time, team,
+        play = Play(db, d.gsis_id, d.drive_id, int(p.playid), time, team,
                     yardline, down, p.yards_togo, p.desc, p.note,
                     None, None, stats)
 
+        play._drive = d
         for pp in p.players:
-            play._play_players.append(PlayPlayer.from_nflgame(play, pp))
+            play._play_players.append(PlayPlayer.from_nflgame(db, play, pp))
         return play
 
-    def __init__(self, drive, gsis_id, drive_id, play_id, time, pos_team,
+    @staticmethod
+    def from_row(db, row):
+        stats = {}
+        for cat in _play_categories:
+            stats[cat] = row.get(cat, 0)
+        return Play(db, row['gsis_id'], row['drive_id'], row['play_id'],
+                    row['player_id'], row['time'], row['pos_team'],
+                    row['yardline'], row['down'], row['yards_to_go'],
+                    row['description'], row['note'], row['time_inserted'],
+                    row['time_updated'], stats)
+
+    def __init__(self, db, gsis_id, drive_id, play_id, time, pos_team,
                  yardline, down, yards_to_go, description, note,
                  time_inserted, time_updated, stats):
         """
@@ -980,8 +1014,9 @@ class Play (object):
         keys; they won't be used. (i.e., You may pass a psycopg2 result
         dictionary constructed from a table row.)
         """
-        self._drive = drive
+        self._drive = None
         self._play_players = []
+        self._db = db
 
         self.gsis_id = gsis_id
         """
@@ -1041,9 +1076,8 @@ class Play (object):
         """The date and time that this play was last updated."""
 
         # Extract the relevant statistical categories only.
-        for cat in stats:
-            if cat in _play_categories:
-                setattr(self, cat, stats[cat])
+        for cat in _play_categories:
+            setattr(self, cat, stats.get(cat, 0))
 
     @property
     def drive(self):
@@ -1093,10 +1127,10 @@ class Drive (object):
                    'time_inserted', 'time_updated',
                    ]
 
-    __slots__ = _sql_fields + ['_game', '_plays']
+    __slots__ = _sql_fields + ['_db', '_game', '_plays']
 
     @staticmethod
-    def from_nflgame(g, d):
+    def from_nflgame(db, g, d):
         """
         Given `g` as a `nfldb.Game` object and `d` as a
         `nflgame.game.Drive` object, `from_nflgame` converts `d` to a
@@ -1109,15 +1143,16 @@ class Drive (object):
         start_field = FieldPosition(getattr(d.field_start, 'offset', None))
         end_field = FieldPosition(d.field_end.offset)
         end_time = _nflgame_clock(d.time_end)
-        drive = Drive(g, g.gsis_id, d.drive_num, start_field, start_time,
+        drive = Drive(db, g.gsis_id, d.drive_num, start_field, start_time,
                       end_field, end_time, d.team,
                       PossessionTime(d.pos_time.total_seconds()),
                       d.first_downs, d.result, d.penalty_yds,
                       d.total_yds, d.play_cnt, None, None)
 
+        drive._game = g
         candidates = []
         for play in d.plays:
-            candidates.append(Play.from_nflgame(drive, play))
+            candidates.append(Play.from_nflgame(db, drive, play))
 
         # At this point, some plays don't have valid game times. Fix it!
         # If we absolutely cannot fix it, drop the play. Maintain integrity!
@@ -1130,14 +1165,14 @@ class Drive (object):
         return drive
 
     @staticmethod
-    def from_row(r):
-        return Drive(None, r['gsis_id'], r['drive_id'], r['start_field'],
+    def from_row(db, r):
+        return Drive(db, r['gsis_id'], r['drive_id'], r['start_field'],
                      r['start_time'], r['end_field'], r['end_time'],
                      r['pos_team'], r['pos_time'], r['first_downs'],
                      r['result'], r['penalty_yards'], r['yards_gained'],
                      r['play_count'], r['time_inserted'], r['time_updated'])
 
-    def __init__(self, game, gsis_id, drive_id, start_field, start_time,
+    def __init__(self, db, gsis_id, drive_id, start_field, start_time,
                  end_field, end_time, pos_team, pos_time,
                  first_downs, result, penalty_yards, yards_gained, play_count,
                  time_inserted, time_updated):
@@ -1147,8 +1182,9 @@ class Drive (object):
         `None`. When it's `None`, then `nfldb.Drive.game` will fetch
         game information on demand.
         """
-        self._game = game
+        self._game = None
         self._plays = []
+        self._db = db
 
         self.gsis_id = gsis_id
         """
@@ -1267,7 +1303,7 @@ class Game (object):
                    'away_turnovers',
                    'time_inserted', 'time_updated']
 
-    __slots__ = _sql_fields + ['db', '_drives']
+    __slots__ = _sql_fields + ['_db', '_drives']
 
     @staticmethod
     def from_nflgame(db, g):
@@ -1305,7 +1341,7 @@ class Game (object):
                     None, None)
 
         for drive in g.drives:
-            game._drives.append(Drive.from_nflgame(game, drive))
+            game._drives.append(Drive.from_nflgame(db, game, drive))
         return game
 
     @staticmethod
@@ -1349,7 +1385,7 @@ class Game (object):
         """
         self._drives = []
 
-        self.db = db
+        self._db = db
         """
         The psycopg2 database connection.
         """

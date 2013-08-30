@@ -17,7 +17,7 @@ import nflgame
 
 __pdoc__ = {}
 
-api_version = 2
+api_version = 3
 __pdoc__['api_version'] = \
     """
     The schema version that this library corresponds to. When the schema
@@ -432,7 +432,7 @@ def _migrate_2(c):
             first_name character varying (100) NULL,
             last_name character varying (100) NULL,
             team character varying (3) NOT NULL,
-            position player_pos NULL,
+            position player_pos NOT NULL,
             profile_id integer NULL,
             profile_url character varying (255) NULL,
             uniform_number usmallint NULL,
@@ -558,6 +558,7 @@ def _migrate_2(c):
             drive_id usmallint NOT NULL,
             play_id usmallint NOT NULL,
             player_id character varying (10) NOT NULL,
+            team character varying (3) NULL,
             %s,
             PRIMARY KEY (gsis_id, drive_id, play_id, player_id),
             FOREIGN KEY (gsis_id, drive_id, play_id)
@@ -575,7 +576,15 @@ def _migrate_2(c):
         )
     ''' % ', '.join(cat._sql_field for cat in _player_categories.values()))
 
-    # Now create all of the indexes.
+def _migrate_3(c):
+    from nfldb.types import _play_categories, _player_categories
+
+    for cat in _player_categories.values():
+        c.execute('CREATE INDEX play_player_in_%s ON play_player (%s ASC)'
+                  % (cat, cat))
+    for cat in _play_categories.values():
+        c.execute('CREATE INDEX play_in_%s ON play (%s ASC)' % (cat, cat))
+
     c.execute('''
         CREATE INDEX player_in_gsis_name ON player (gsis_name ASC);
         CREATE INDEX player_in_full_name ON player (full_name ASC);
@@ -618,14 +627,23 @@ def _migrate_2(c):
     ''')
     c.execute('''
         CREATE INDEX play_in_gsis_id ON play (gsis_id ASC);
-        CREATE INDEX play_in_drive_id ON play (drive_id ASC);
+        CREATE INDEX play_in_gsis_drive_id ON play (gsis_id ASC, drive_id ASC);
         CREATE INDEX play_in_time ON play
             (((time).phase) ASC, ((time).elapsed) ASC);
+        CREATE INDEX play_in_pos_team ON play (pos_team ASC);
         CREATE INDEX play_in_yardline ON play
             (((yardline).pos) ASC);
         CREATE INDEX play_in_down ON play (down ASC);
         CREATE INDEX play_in_yards_to_go ON play (yards_to_go DESC);
     ''')
     c.execute('''
-        CREATE INDEX play_player_in_player_id ON play_player (player_id ASC);
+        CREATE INDEX pp_in_gsis_id ON play_player (gsis_id ASC);
+        CREATE INDEX pp_in_player_id ON play_player (player_id ASC);
+        CREATE INDEX pp_in_gsis_drive_id ON play_player
+            (gsis_id ASC, drive_id ASC);
+        CREATE INDEX pp_in_gsis_drive_play_id ON play_player
+            (gsis_id ASC, drive_id ASC, play_id ASC);
+        CREATE INDEX pp_in_gsis_player_id ON play_player
+            (gsis_id ASC, player_id ASC);
+        CREATE INDEX pp_in_team ON play_player (team ASC);
     ''')
