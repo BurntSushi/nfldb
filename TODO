@@ -1,0 +1,6 @@
+OMG. Remove `nflgame` from `nfldb`.
+
+Shove it into the update script. It's about 2.3x slower! (~150ms to ~350ms)
+
+(It's probably because of the JSON player database loading. Blech.)
+
