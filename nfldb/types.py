@@ -14,10 +14,9 @@ from psycopg2.extensions import AsIs, ISQLQuote
 
 import pytz
 
-import nflgame
-
 import nfldb.category
 from nfldb.db import _upsert, now, Tx
+import nfldb.team
 
 __pdoc__ = {}
 
@@ -283,7 +282,7 @@ class Team (object):
     __cache = defaultdict(dict)
 
     def __new__(cls, db, abbr):
-        abbr = nflgame.standard_team(abbr)
+        abbr = nfldb.team.standard_team(abbr)
         if abbr in Team.__cache:
             return Team.__cache[abbr]
         return object.__new__(cls)
@@ -300,7 +299,7 @@ class Team (object):
             # Loaded from cache.
             return
 
-        self.team_id = nflgame.standard_team(abbr)
+        self.team_id = nfldb.team.standard_team(abbr)
         """
         The unique team identifier represented as its standard
         2 or 3 letter abbreviation.
@@ -713,11 +712,12 @@ class Player (object):
                 kwargs[k] = v
 
             # Convert position and status values to an enumeration.
-            kwargs['position'] = getattr(Enums.player_pos, kwargs['position'],
+            kwargs['position'] = getattr(Enums.player_pos,
+                                         kwargs['position'] or '',
                                          Enums.player_pos.UNK)
 
             trans = Enums._nflgame_player_status
-            kwargs['status'] = trans.get(kwargs['status'],
+            kwargs['status'] = trans.get(kwargs['status'] or '',
                                          Enums.player_status.Unknown)
         if kwargs.get('status', None) is None:
             kwargs['status'] = Enums.player_status.Unknown
@@ -852,7 +852,7 @@ class PlayPlayer (object):
         for k in _player_categories:
             stats[k] = pp._stats.get(k, 0)
 
-        team = nflgame.standard_team(pp.team)
+        team = nfldb.team.standard_team(pp.team)
         play_player = PlayPlayer(db, p.gsis_id, p.drive_id, p.play_id,
                                  pp.playerid, team, stats)
         play_player._play = p
@@ -1314,8 +1314,8 @@ class Game (object):
         `db` should be a psycopg2 connection returned by
         `nfldb.connect`.
         """
-        home_team = nflgame.standard_team(g.home)
-        away_team = nflgame.standard_team(g.away)
+        home_team = nfldb.team.standard_team(g.home)
+        away_team = nfldb.team.standard_team(g.away)
         season_type = Enums._nflgame_season_phase[g.schedule['season_type']]
         day_of_week = Enums._nflgame_game_day[g.schedule['wday']]
         start_time = _nflgame_start_time(g.schedule)

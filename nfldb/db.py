@@ -13,7 +13,7 @@ import pytz
 
 import toml
 
-import nflgame
+import nfldb.team
 
 __pdoc__ = {}
 
@@ -417,12 +417,8 @@ def _migrate_2(c):
     ''')
     c.execute('''
         INSERT INTO team (team_id, city, name) VALUES %s
-    ''' % (', '.join(_mogrify(c, team[0:3]) for team in nflgame.teams)))
-    c.execute('''
-        INSERT INTO team (team_id, city, name) VALUES ('UNK', 'UNK', 'UNK')
-    ''')
+    ''' % (', '.join(_mogrify(c, team[0:3]) for team in nfldb.team.teams)))
 
-    # Create the rest of the schema.
     c.execute('''
         CREATE TABLE player (
             player_id character varying (10) NOT NULL
