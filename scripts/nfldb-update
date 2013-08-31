@@ -49,6 +49,7 @@ def game_from_schedule(cursor, gsis_id):
 
 
 def update_players(cursor, interval):
+    db = cursor.connection
     cursor.execute('SELECT last_roster_download FROM meta')
     last = cursor.fetchone()['last_roster_download']
     update_due = (nfldb.now() - last).total_seconds() >= interval
@@ -76,11 +77,11 @@ def update_players(cursor, interval):
     if num_existing == 0:  # Fast path the initial insert.
         insert = []
         for p in nflgame.players.itervalues():
-            insert.append(nfldb.Player.from_nflgame_player(p)._row)
+            insert.append(nfldb.Player.from_nflgame_player(db, p)._row)
         nfldb.db._big_insert(cursor, 'player', insert)
     else:
         for p in nflgame.players.itervalues():
-            vals = nfldb.Player.from_nflgame_player(p)._row
+            vals = nfldb.Player.from_nflgame_player(db, p)._row
             nfldb.db._upsert(cursor, 'player', vals, [vals[0]])
     log('done.')
 
