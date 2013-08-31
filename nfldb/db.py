@@ -572,6 +572,7 @@ def _migrate_2(c):
         )
     ''' % ', '.join(cat._sql_field for cat in _player_categories.values()))
 
+
 def _migrate_3(c):
     from nfldb.types import _play_categories, _player_categories
 

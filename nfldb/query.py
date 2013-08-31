@@ -288,7 +288,7 @@ class Query (Condition):
             andsql = '(%s)' % andsql
             disjunctions.append(andsql)
         disjunctions += _cond_where_sql(cur, self._orelse, tables)
-        
+
         if len(disjunctions) == 0:
             return ''
         return '(%s)' % (' OR '.join(disjunctions))
@@ -356,7 +356,7 @@ class Query (Condition):
                 conds.append(pkin(['gsis_id', 'drive_id', 'play_id'], play,
                              prefix='play_player.'))
 
-            where =_prefix_or_empty(
+            where = _prefix_or_empty(
                 ' AND ', self._sql_where(cur, ['play', 'play_player']))
             cur.execute('''
                 SELECT
@@ -408,7 +408,6 @@ class Query (Condition):
                 drive.add((row['gsis_id'], row['drive_id']))
                 play.add((row['gsis_id'], row['drive_id'], row['play_id']))
                 player.add(row['player_id'])
-
 
         return {
             'game': tuple(game or []), 'drive': tuple(drive or []),

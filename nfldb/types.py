@@ -144,10 +144,6 @@ class _Enum (enum.Enum):
         corresponding to `enum`. Namely, `enum` should be a member of
         `nfldb.Enums`.
         """
-        # def _(sqlv, t): 
-            # print(enum, sqlv) 
-            # return enum[sqlv] 
-        # return _ 
         return lambda sqlv, _: enum[sqlv]
 
     def __conform__(self, proto):
