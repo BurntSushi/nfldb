@@ -1,4 +1,8 @@
 from __future__ import absolute_import, division, print_function
+try:
+    from collections import OrderedDict
+except ImportError:
+    from ordereddict import OrderedDict
 import re
 
 from nfldb.db import Tx
@@ -51,11 +55,20 @@ def _prefix_or_empty(prefix, s):
     return '%s%s' % (prefix, s)
 
 
-def _sql_pkey_in(cur, pkeys, ids):
+def _sql_pkey_in(cur, pkeys, ids, prefix=''):
+    pkeys = ['%s%s' % (prefix, pk) for pk in pkeys]
+
     if len(ids) == 0:
         nulls = ', '.join(['NULL'] * len(pkeys))
         return '(%s) IN ((%s))' % (', '.join(pkeys), nulls)
     r = '(%s) IN %s' % (', '.join(pkeys), cur.mogrify('%s', (tuple(ids),)))
+    # r = '(%s) = ANY(%s)' % (', '.join(pkeys), cur.mogrify('%s', (list(ids),))) 
+
+    # pkey = '(%s)' % (', '.join(pkeys)) 
+    # conds = [] 
+    # for idval in ids: 
+        # conds.append('%s = %s' % (pkey, cur.mogrify('%s', (idval,)))) 
+    # r = '(%s)' % (' OR '.join(conds)) 
     return r
 
 
@@ -246,14 +259,55 @@ class Query (Condition):
         results = []
         with Tx(self._db) as cursor:
             ids = self._ids(cursor, 'drive')
-            q = 'SELECT %s FROM drive WHERE %s' \
+            q = 'SELECT %s FROM drive WHERE %s %s' \
                 % (_select_fields('drive', types.Drive._sql_fields),
-                   _sql_pkey_in(cursor, ['gsis_id', 'drive_id'], ids['drive']))
+                   _sql_pkey_in(cursor, ['gsis_id'], ids['game']),
+                   _prefix_or_empty(
+                       ' AND ',
+                       _sql_pkey_in(cursor, ['drive_id'], ids['drive'])))
             cursor.execute(q)
 
             for row in cursor.fetchall():
                 results.append(types.Drive.from_row(self._db, row))
         return results
+
+    def as_plays(self):
+        """
+        Executes the query and returns the results as a list of
+        `nlfdb.Play` objects.
+        """
+        # Exclude common columns between the `play` and `play_player`
+        # tables.
+        play_fields = _select_fields('play', types.Play._sql_fields)
+        player_fields = _select_fields('play_player',
+                                       types.PlayPlayer._sql_fields)
+
+        plays = OrderedDict() 
+        with Tx(self._db) as cursor:
+            ids = self._ids(cursor, 'play')
+            playids = set(ids['play'])
+
+            gameids = _sql_pkey_in(cursor, ['gsis_id'], ids['game'])
+            driveids = _prefix_or_empty(
+                ' AND ', _sql_pkey_in(cursor, ['drive_id'], ids['drive']))
+
+            cursor.execute('''
+                SELECT %s FROM play WHERE %s %s
+                ORDER BY gsis_id, drive_id, play_id
+            ''' % (play_fields, gameids, driveids))
+            for row in cursor.fetchall():
+                if row['play_id'] in playids:
+                    plays[row['play_id']] = types.Play.from_row(self._db, row)
+
+            cursor.execute('''
+                SELECT %s FROM play_player WHERE %s %s
+            ''' % (player_fields, gameids, driveids))
+            for row in cursor.fetchall():
+                if row['play_id'] in playids:
+                    pp = types.PlayPlayer.from_row(self._db, row)
+                    plays[row['play_id']]._play_players.append(pp)
+        return plays.values()
+
 
     def as_players(self):
         """
@@ -304,8 +358,7 @@ class Query (Condition):
         case of the `drive` and `play` table, those values are tuples.
         """
         def pkin(pkeys, ids, prefix=''):
-            pkeys = ['%s%s' % (prefix, pk) for pk in pkeys]
-            return _sql_pkey_in(cur, pkeys, ids)
+            return _sql_pkey_in(cur, pkeys, ids, prefix=prefix)
 
         # Initialize sets to `None`. This distinguishes an empty result
         # set and a lack of search.
@@ -340,7 +393,7 @@ class Query (Condition):
             game, drive = set(), set()
             for row in cur.fetchall():
                 game.add(row['gsis_id'])
-                drive.add((row['gsis_id'], row['drive_id']))
+                drive.add(row['drive_id'])
 
         # Filter by play.
         # This is a little messed, since we're searching on the `play`
@@ -350,11 +403,9 @@ class Query (Condition):
             if game is not None:
                 conds.append(pkin(['gsis_id'], game, prefix='play_player.'))
             if drive is not None:
-                conds.append(pkin(['gsis_id', 'drive_id'], drive,
-                             prefix='play_player.'))
+                conds.append(pkin(['drive_id'], drive, prefix='play_player.'))
             if play is not None:
-                conds.append(pkin(['gsis_id', 'drive_id', 'play_id'], play,
-                             prefix='play_player.'))
+                conds.append(pkin(['play_id'], play, prefix='play_player.'))
 
             where = _prefix_or_empty(
                 ' AND ', self._sql_where(cur, ['play', 'play_player']))
@@ -369,13 +420,12 @@ class Query (Condition):
                     AND play_player.play_id = play.play_id
                 WHERE %s %s
             ''' % (' AND '.join(conds), where))
-            print(cur.query)
 
             game, drive, play = set(), set(), set()
             for row in cur.fetchall():
                 game.add(row['gsis_id'])
-                drive.add((row['gsis_id'], row['drive_id']))
-                play.add((row['gsis_id'], row['drive_id'], row['play_id']))
+                drive.add(row['drive_id'])
+                play.add(row['play_id'])
 
         # Finally filter by player.
         if 'player' in tables:
@@ -385,11 +435,9 @@ class Query (Condition):
             if game is not None:
                 conds.append(pkin(['gsis_id'], game, prefix='play_player.'))
             if drive is not None:
-                conds.append(pkin(['gsis_id', 'drive_id'], drive,
-                                  prefix='play_player.'))
+                conds.append(pkin(['drive_id'], drive, prefix='play_player.'))
             if play is not None:
-                conds.append(pkin(['gsis_id', 'drive_id', 'play_id'], play,
-                                  prefix='play_player.'))
+                conds.append(pkin(['play_id'], play, prefix='play_player.'))
 
             where = _prefix_or_empty(' AND ', self._sql_where(cur, ['player']))
             cur.execute('''
@@ -405,8 +453,8 @@ class Query (Condition):
             game, drive, play, player = set(), set(), set(), set()
             for row in cur.fetchall():
                 game.add(row['gsis_id'])
-                drive.add((row['gsis_id'], row['drive_id']))
-                play.add((row['gsis_id'], row['drive_id'], row['play_id']))
+                drive.add(row['drive_id'])
+                play.add(row['play_id'])
                 player.add(row['player_id'])
 
         return {

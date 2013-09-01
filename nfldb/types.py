@@ -830,8 +830,7 @@ class Player (object):
 
 
 class PlayPlayer (object):
-    _sql_fields = (['gsis_id', 'drive_id', 'play_id', 'player_id',
-                    'team']
+    _sql_fields = (['gsis_id', 'drive_id', 'play_id', 'player_id', 'team']
                    + _player_categories.keys()
                    )
 
@@ -846,7 +845,8 @@ class PlayPlayer (object):
         """
         stats = {}
         for k in _player_categories:
-            stats[k] = pp._stats.get(k, 0)
+            if pp._stats.get(k, 0) > 0:
+                stats[k] = pp._stats[k]
 
         team = nfldb.team.standard_team(pp.team)
         play_player = PlayPlayer(db, p.gsis_id, p.drive_id, p.play_id,
@@ -857,11 +857,8 @@ class PlayPlayer (object):
 
     @staticmethod
     def from_row(db, row):
-        stats = {}
-        for cat in _player_categories:
-            stats[cat] = row.get(cat, 0)
         return PlayPlayer(db, row['gsis_id'], row['drive_id'],
-                          row['play_id'], row['player_id'], row['team'], stats)
+                          row['play_id'], row['player_id'], row['team'], row)
 
     def __init__(self, db, gsis_id, drive_id, play_id, player_id, team,
                  stats):
@@ -913,8 +910,12 @@ class PlayPlayer (object):
         statistics in this play.
         """
         # Extract the relevant statistical categories only.
+        get = stats.get
+        seta = setattr
         for cat in _player_categories:
-            setattr(self, cat, stats.get(cat, 0))
+            val = get(cat, 0)
+            if val > 0:
+                seta(self, cat, val)
 
     @property
     def play(self):
@@ -941,6 +942,11 @@ class PlayPlayer (object):
     def _row(self):
         return _as_row(PlayPlayer._sql_fields, self)
 
+    def __getattr__(self, k):
+        if k in _player_categories:
+            return 0
+        raise AttributeError
+
     def _save(self, cursor):
         vals = self._row
         _upsert(cursor, 'play_player', vals, vals[0:4])
@@ -966,7 +972,8 @@ class Play (object):
         """
         stats = {}
         for k in _play_categories:
-            stats[k] = p._stats.get(k, 0)
+            if p._stats.get(k, 0) > 0:
+                stats[k] = p._stats[k]
 
         # Fix up some fields so they meet the constraints of the schema.
         # The `time` field is cleaned up afterwards in
@@ -988,13 +995,15 @@ class Play (object):
     @staticmethod
     def from_row(db, row):
         stats = {}
+        get = row.get
         for cat in _play_categories:
-            stats[cat] = row.get(cat, 0)
+            if get(cat, 0) > 0:
+                stats[cat] = row[cat]
         return Play(db, row['gsis_id'], row['drive_id'], row['play_id'],
-                    row['player_id'], row['time'], row['pos_team'],
-                    row['yardline'], row['down'], row['yards_to_go'],
-                    row['description'], row['note'], row['time_inserted'],
-                    row['time_updated'], stats)
+                    row['time'], row['pos_team'], row['yardline'],
+                    row['down'], row['yards_to_go'], row['description'],
+                    row['note'], row['time_inserted'], row['time_updated'],
+                    stats)
 
     def __init__(self, db, gsis_id, drive_id, play_id, time, pos_team,
                  yardline, down, yards_to_go, description, note,
@@ -1072,8 +1081,8 @@ class Play (object):
         """The date and time that this play was last updated."""
 
         # Extract the relevant statistical categories only.
-        for cat in _play_categories:
-            setattr(self, cat, stats.get(cat, 0))
+        for cat in stats:
+            setattr(self, cat, stats[cat])
 
     @property
     def drive(self):
@@ -1099,6 +1108,11 @@ class Play (object):
     @property
     def _row(self):
         return _as_row(Play._sql_fields, self)
+
+    def __getattr__(self, k):
+        if k in _play_categories:
+            return 0
+        raise AttributeError
 
     def _save(self, cursor):
         vals = self._row
