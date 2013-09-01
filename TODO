@@ -1,0 +1,19 @@
+Why is this:
+
+  q = nfldb.Query(db)
+  q.games(season_type='Regular', season_year=2012, week=1)
+  q.players(position='P')
+  ps = q.as_plays()
+
+twice as slow as this:
+
+  q = nfldb.Query(db)
+  q.games(season_type='Regular', season_year=2012, week=1)
+  q.players(team='NE')
+  ps = q.as_plays()
+
+when the latter returns more results?
+
+------
+
+Compare test.py with nflgame-test.py... ug

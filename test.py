@@ -16,10 +16,13 @@ db = nfldb.connect()
     # print g.gsis_id, g 
 
 q = nfldb.Query(db)
-q.games(team='NE', season_type='Regular', season_year=2012, week=1)
-ps = q.as_drives()
+q.games(season_type='Regular', season_year=2012, week=1)
+ps = q.as_plays()
 
 print len(ps)
-for p in ps: print p.result
+print sum(len(p._play_players) for p in ps)
+for i in xrange(10):
+    print ps[i].description
+# for p in ps: print p.description 
 
 
