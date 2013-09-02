@@ -291,14 +291,13 @@ class Query (Condition):
         player_fields = _select_fields('play_player',
                                        types.PlayPlayer._sql_fields)
 
-        plays = OrderedDict() 
+        plays = OrderedDict()
         ids = self._ids('play')
         playids = set(ids['play'])
 
-        # with Tx(self._db, name='plays') as cursor: 
         with Tx(self._db, factory=tuple_cursor) as cursor:
             pkey = None
-            if len(ids['drive']) < 5000:
+            if len(ids['drive']) < 8000:
                 pkey = _sql_pkey_in(cursor, ['gsis_id', 'drive_id'],
                                     ids['drive'])
             if pkey is None:
@@ -308,24 +307,25 @@ class Query (Condition):
                 SELECT %s FROM play %s
                 ORDER BY gsis_id, drive_id, play_id
             ''' % (play_fields, _where_and(pkey)))
-            init = types.Play.from_tuple
+            init = types.Play._from_tuple
             for t in cursor.fetchall():
                 pid = (t[0], t[1], t[2])
                 if pid in playids:
-                    plays[pid] = init(self._db, t)
+                    p = init(self._db, t)
+                    p._play_players = []  # Load this below.
+                    plays[pid] = p
 
         with Tx(self._db, factory=tuple_cursor) as cursor:
             cursor.execute('''
                 SELECT %s FROM play_player %s
             ''' % (player_fields, _where_and(pkey)))
-            init = types.PlayPlayer.from_tuple
+            init = types.PlayPlayer._from_tuple
             for t in cursor.fetchall():
                 pid = (t[0], t[1], t[2])
                 if pid in playids:
                     pp = init(self._db, t)
                     plays[pid]._play_players.append(pp)
         return plays.values()
-
 
     def as_players(self):
         """
@@ -427,9 +427,6 @@ class Query (Condition):
                 elif game is not None:
                     ide = pkin(['gsis_id'], game)
 
-                # Wipe the slate clean. We'll rebuild the sets below.
-                game, drive, play = set(), set(), set()
-
                 # When there are no criteria for `play_player`, then we've
                 # got to make sure to always hit the `play` table.
                 # Otherwise, we only hit the `play` table when it's in the
@@ -437,25 +434,27 @@ class Query (Condition):
                 # with no criteria to work as expected.
                 if 'play_player' not in tables or 'play' in self._tables():
                     q = '''
-                        SELECT
-                            play.gsis_id, play.drive_id, play.play_id
-                        FROM play
-                        %s
+                        SELECT play.gsis_id, play.drive_id, play.play_id
+                        FROM play %s
                     ''' % (_where_and(ide, self._sql_where(cur, ['play'])))
                     cur.execute(q)
 
+                    game, drive, play = set(), set(), set()
                     for row in cur.fetchall():
                         game.add(row[0])
                         drive.add((row[0], row[1]))
                         play.add((row[0], row[1], row[2]))
 
                 if 'play_player' in tables:
+                    # The trick here is to take the intersection of the results
+                    # from play_player with the results from play.
+                    # But we have to be careful: if there were no prior
+                    # criteria specified to game/drive/play, then the
+                    # intersection would erroneously return the empty set.
                     where = self._sql_where(cur, ['play_player'])
                     q = '''
-                        SELECT
-                            gsis_id, drive_id, play_id
-                        FROM play_player
-                        %s
+                        SELECT gsis_id, drive_id, play_id
+                        FROM play_player %s
                     ''' % (_where_and(ide, where))
                     cur.execute(q)
                     pp_game, pp_drive, pp_play = set(), set(), set()
@@ -463,9 +462,9 @@ class Query (Condition):
                         pp_game.add(row[0])
                         pp_drive.add((row[0], row[1]))
                         pp_play.add((row[0], row[1], row[2]))
-                    game = game.intersection(pp_game)
-                    drive = drive.intersection(pp_drive)
-                    play = play.intersection(pp_play)
+                    game = (game or pp_game).intersection(pp_game)
+                    drive = (drive or pp_drive).intersection(pp_drive)
+                    play = (play or pp_play).intersection(pp_play)
 
             # Finally filter by player.
             if 'player' in tables:
