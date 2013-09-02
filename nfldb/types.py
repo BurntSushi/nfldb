@@ -691,10 +691,10 @@ class Player (object):
     """
 
     @staticmethod
-    def from_nflgame(db, p):
+    def _from_nflgame(db, p):
         """
         Given `p` as a `nflgame.player.PlayPlayerStats` object,
-        `from_nflgame` converts `p` to a `nfldb.Player` object.
+        `_from_nflgame` converts `p` to a `nfldb.Player` object.
         """
         meta = ['full_name', 'first_name', 'last_name', 'team', 'position',
                 'profile_id', 'profile_url', 'uniform_number', 'birthdate',
@@ -724,17 +724,17 @@ class Player (object):
         return Player(db, p.playerid, p.name, **kwargs)
 
     @staticmethod
-    def from_nflgame_player(db, p):
+    def _from_nflgame_player(db, p):
         """
         Given `p` as a `nflgame.player.Player` object,
-        `from_nflgame_player` converts `p` to a `nfldb.Player` object.
+        `_from_nflgame_player` converts `p` to a `nfldb.Player` object.
         """
         class _Player (object):
             def __init__(self):
                 self.playerid = p.player_id
                 self.name = p.gsis_name
                 self.player = p
-        return Player.from_nflgame(db, _Player())
+        return Player._from_nflgame(db, _Player())
 
     @staticmethod
     def from_row(db, r):
@@ -837,10 +837,10 @@ class PlayPlayer (object):
     __slots__ = _sql_fields + ['_db', '_play', '_player']
 
     @staticmethod
-    def from_nflgame(db, p, pp):
+    def _from_nflgame(db, p, pp):
         """
         Given `p` as a `nfldb.Play` object and `pp` as a
-        `nflgame.player.PlayPlayerStats` object, `from_nflgame`
+        `nflgame.player.PlayPlayerStats` object, `_from_nflgame`
         converts `pp` to a `nfldb.PlayPlayer` object.
         """
         stats = {}
@@ -852,11 +852,11 @@ class PlayPlayer (object):
         play_player = PlayPlayer(db, p.gsis_id, p.drive_id, p.play_id,
                                  pp.playerid, team, stats)
         play_player._play = p
-        play_player._player = Player.from_nflgame(db, pp)
+        play_player._player = Player._from_nflgame(db, pp)
         return play_player
 
     @staticmethod
-    def from_tuple(db, t):
+    def _from_tuple(db, t):
         cols = PlayPlayer._sql_fields
         stats = {}
         for i, v in enumerate(t[5:], 5):
@@ -930,7 +930,8 @@ class PlayPlayer (object):
         to. The play is retrieved from the database if necessary.
         """
         if self._play is None:
-            assert False, 'unimplemented'
+            self._play = Play.from_id(self._db, self.gsis_id, self.drive_id,
+                                      self._play_id)
         return self._play
 
     @property
@@ -941,7 +942,7 @@ class PlayPlayer (object):
         necessary.
         """
         if self._player is None:
-            assert False, 'unimplemented'
+            self._player = Player.from_id(self._db, self.player_id)
         return self._player
 
     @property
@@ -970,10 +971,10 @@ class Play (object):
     __slots__ = _sql_fields + ['_db', '_drive', '_play_players']
 
     @staticmethod
-    def from_nflgame(db, d, p):
+    def _from_nflgame(db, d, p):
         """
         Given `d` as a `nfldb.Drive` object and `p` as a
-        `nflgame.game.Play` object, `from_nflgame` converts `p` to a
+        `nflgame.game.Play` object, `_from_nflgame` converts `p` to a
         `nfldb.Play` object.
         """
         stats = {}
@@ -983,7 +984,7 @@ class Play (object):
 
         # Fix up some fields so they meet the constraints of the schema.
         # The `time` field is cleaned up afterwards in
-        # `nfldb.Drive.from_nflgame`, since it needs data about surrounding
+        # `nfldb.Drive._from_nflgame`, since it needs data about surrounding
         # plays.
         time = None if not p.time else _nflgame_clock(p.time)
         yardline = FieldPosition(getattr(p.yardline, 'offset', None))
@@ -994,12 +995,13 @@ class Play (object):
                     None, None, stats)
 
         play._drive = d
+        play._play_players = []
         for pp in p.players:
-            play._play_players.append(PlayPlayer.from_nflgame(db, play, pp))
+            play._play_players.append(PlayPlayer._from_nflgame(db, play, pp))
         return play
 
     @staticmethod
-    def from_tuple(db, t):
+    def _from_tuple(db, t):
         cols = Play._sql_fields
         stats = {}
         for i, v in enumerate(t[12:], 12):
@@ -1021,6 +1023,23 @@ class Play (object):
                     row['note'], row['time_inserted'], row['time_updated'],
                     stats)
 
+    @staticmethod
+    def from_id(db, gsis_id, drive_id, play_id):
+        """
+        Given a GSIS identifier (e.g., `2012090500`) as a string,
+        an integer drive id and an integer play id, this returns a
+        `nfldb.Play` object corresponding to `id`.
+
+        If no corresponding play is found, then `None` is returned.
+        """
+        with Tx(db) as cursor:
+            cursor.execute('''
+                SELECT * FROM play WHERE (gsis_id, drive_id, play_id) = %s
+            ''', ((gsis_id, drive_id, play_id),))
+            if cursor.rowcount > 0:
+                return Play.from_row(db, cursor.fetchone())
+        return None
+
     def __init__(self, db, gsis_id, drive_id, play_id, time, pos_team,
                  yardline, down, yards_to_go, description, note,
                  time_inserted, time_updated, stats):
@@ -1036,7 +1055,7 @@ class Play (object):
         dictionary constructed from a table row.)
         """
         self._drive = None
-        self._play_players = []
+        self._play_players = None
         self._db = db
 
         self.gsis_id = gsis_id
@@ -1108,7 +1127,7 @@ class Play (object):
         drive is retrieved from the database if it hasn't been already.
         """
         if self._drive is None:
-            assert False, 'unimplemented'
+            self._drive = Drive.from_id(self._db, self.gsis_id, self.drive_id)
         return self._drive
 
     @property
@@ -1117,9 +1136,21 @@ class Play (object):
         Returns a list of all `nfldb.PlayPlayer`s in this play. They
         are automatically retrieved from the database if they haven't
         been already.
+
+        If there are no players attached to this play, then an empty
+        list is returned.
         """
         if self._play_players is None:
-            assert False, 'unimplemented'
+            self._play_players = []
+            with Tx(self._db) as cursor:
+                cursor.execute('''
+                    SELECT * FROM play_player
+                    WHERE (gsis_id, drive_id, play_id) = %s
+                ''', ((self.gsis_id, self.drive_id, self.play_id),))
+                for row in cursor.fetchall():
+                    pp = PlayPlayer.from_row(self._db, row)
+                    pp._play = self
+                    self._play_players.append(pp)
         return self._play_players
 
     @property
@@ -1141,7 +1172,7 @@ class Play (object):
             WHERE gsis_id = %s AND drive_id = %s AND play_id = %s
                   AND NOT (player_id = ANY (%s))
         ''', (self.gsis_id, self.drive_id, self.play_id,
-              [p.player_id for p in self._play_players]))
+              [p.player_id for p in (self._play_players or [])]))
         for pp in (self._play_players or []):
             pp._save(cursor)
 
@@ -1157,14 +1188,14 @@ class Drive (object):
     __slots__ = _sql_fields + ['_db', '_game', '_plays']
 
     @staticmethod
-    def from_nflgame(db, g, d):
+    def _from_nflgame(db, g, d):
         """
         Given `g` as a `nfldb.Game` object and `d` as a
-        `nflgame.game.Drive` object, `from_nflgame` converts `d` to a
+        `nflgame.game.Drive` object, `_from_nflgame` converts `d` to a
         `nfldb.Drive` object.
 
         Generally, this function should not be used. It is called
-        automatically by `nfldb.Game.from_nflgame`.
+        automatically by `nfldb.Game._from_nflgame`.
         """
         start_time = _nflgame_clock(d.time_start)
         start_field = FieldPosition(getattr(d.field_start, 'offset', None))
@@ -1179,7 +1210,7 @@ class Drive (object):
         drive._game = g
         candidates = []
         for play in d.plays:
-            candidates.append(Play.from_nflgame(db, drive, play))
+            candidates.append(Play._from_nflgame(db, drive, play))
 
         # At this point, some plays don't have valid game times. Fix it!
         # If we absolutely cannot fix it, drop the play. Maintain integrity!
@@ -1198,6 +1229,23 @@ class Drive (object):
                      r['pos_team'], r['pos_time'], r['first_downs'],
                      r['result'], r['penalty_yards'], r['yards_gained'],
                      r['play_count'], r['time_inserted'], r['time_updated'])
+
+    @staticmethod
+    def from_id(db, gsis_id, drive_id):
+        """
+        Given a GSIS identifier (e.g., `2012090500`) as a string
+        and a integer drive id, this returns a `nfldb.Drive` object
+        corresponding to `id`.
+
+        If no corresponding drive is found, then `None` is returned.
+        """
+        with Tx(db) as cursor:
+            cursor.execute('''
+                SELECT * FROM drive WHERE (gsis_id, drive_id) = %s
+            ''', (id,))
+            if cursor.rowcount > 0:
+                return Drive.from_row(db, cursor.fetchone())
+        return None
 
     def __init__(self, db, gsis_id, drive_id, start_field, start_time,
                  end_field, end_time, pos_team, pos_time,
@@ -1288,7 +1336,7 @@ class Drive (object):
         game is retrieved from the database if it hasn't been already.
         """
         if self._game is None:
-            assert False, 'unimplemented'
+            return Game.from_id(self.gsis_id)
         return self._game
 
     @property
@@ -1297,9 +1345,20 @@ class Drive (object):
         Returns a list of all `nfldb.Play`s in this drive. They are
         automatically retrieved from the database if they haven't been
         already.
+
+        If there are no plays in the drive (wtf?), then an empty list
+        is returned.
         """
         if self._plays is None:
-            assert False, 'unimplemented'
+            self._plays = []
+            with Tx(self._db) as cursor:
+                cursor.execute('''
+                    SELECT * FROM play WHERE (gsis_id, drive_id) = %s
+                ''', ((self.gsis_id, self.drive_id),))
+                for row in cursor.fetchall():
+                    p = Play.from_row(self.db, cursor.fetchone())
+                    p._drive = self
+                    self._plays.append(p)
         return self._plays
 
     @property
@@ -1333,7 +1392,7 @@ class Game (object):
     __slots__ = _sql_fields + ['_db', '_drives']
 
     @staticmethod
-    def from_nflgame(db, g):
+    def _from_nflgame(db, g):
         """
         Converts a `nflgame.game.Game` object to a `nfldb.Game`
         object.
@@ -1368,11 +1427,11 @@ class Game (object):
                     None, None)
 
         for drive in g.drives:
-            game._drives.append(Drive.from_nflgame(db, game, drive))
+            game._drives.append(Drive._from_nflgame(db, game, drive))
         return game
 
     @staticmethod
-    def from_schedule(db, s):
+    def _from_schedule(db, s):
         """
         Converts a schedule dictionary from the `nflgame.schedule`
         module to a bare-bones `nfldb.Game` object.
@@ -1392,11 +1451,27 @@ class Game (object):
                 for which, k in itertools.product(('home', 'away'), zeroes):
                     setattr(self, k % which, 0)
                 self.data = {'home': {'to': 0}, 'away': {'to': 0}}
-        return Game.from_nflgame(db, _Game())
+        return Game._from_nflgame(db, _Game())
 
     @staticmethod
     def from_row(db, row):
         return Game(db, **row)
+
+    @staticmethod
+    def from_id(db, gsis_id):
+        """
+        Given a GSIS identifier (e.g., `2012090500`) as a string,
+        returns a `nfldb.Game` object corresponding to `id`.
+
+        If no corresponding game is found, `None` is returned.
+        """
+        with Tx(db) as cursor:
+            cursor.execute('''
+                SELECT * FROM game WHERE gsis_id = %s
+            ''', (id,))
+            if cursor.rowcount > 0:
+                return Game.from_row(db, cursor.fetchone())
+        return None
 
     def __init__(self, db, gsis_id, gamekey, start_time, week, day_of_week,
                  season_year, season_type, finished,
@@ -1513,9 +1588,20 @@ class Game (object):
         Returns a list of `nfldb.Drive`s for this game. They are
         automatically loaded from the database if they haven't been
         already.
+
+        If there are no drives found in the game, then an empty list
+        is returned.
         """
         if self._drives is None:
-            assert False, 'unimplemented'
+            self._drives = []
+            with Tx(self._db) as cursor:
+                cursor.execute('''
+                    SELECT * FROM drive WHERE gsis_id = %s
+                ''', (self.gsis_id,))
+                for row in cursor.fetchall():
+                    d = Drive.from_row(self.db, cursor.fetchone())
+                    d._game = self
+                    self._drives.append(d)
         return self._drives
 
     @property
