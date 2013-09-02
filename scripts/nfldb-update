@@ -33,7 +33,7 @@ def game_from_id(cursor, gsis_id):
     g = nflgame.game.Game(gsis_id)
     if g is None:  # Whoops. I guess the pregame hasn't started yet?
         return game_from_schedule(cursor, gsis_id)
-    return nfldb.Game.from_nflgame(cursor.connection, g)
+    return nfldb.Game._from_nflgame(cursor.connection, g)
 
 
 def game_from_schedule(cursor, gsis_id):
@@ -45,7 +45,7 @@ def game_from_schedule(cursor, gsis_id):
     `nflgame.game.Game` object.
     """
     s = nflgame.schedule.games_byid[gsis_id]
-    return nfldb.Game.from_schedule(cursor.connection, s)
+    return nfldb.Game._from_schedule(cursor.connection, s)
 
 
 def update_players(cursor, interval):
@@ -73,15 +73,18 @@ def update_players(cursor, interval):
         return
     log('done.')
 
+    # Reset the player JSON database.
+    nflgame.players = nflgame.player._create_players()
+
     log('Updating %d players... ' % len(nflgame.players), end='')
     if num_existing == 0:  # Fast path the initial insert.
         insert = []
         for p in nflgame.players.itervalues():
-            insert.append(nfldb.Player.from_nflgame_player(db, p)._row)
+            insert.append(nfldb.Player._from_nflgame_player(db, p)._row)
         nfldb.db._big_insert(cursor, 'player', insert)
     else:
         for p in nflgame.players.itervalues():
-            vals = nfldb.Player.from_nflgame_player(db, p)._row
+            vals = nfldb.Player._from_nflgame_player(db, p)._row
             nfldb.db._upsert(cursor, 'player', vals, [vals[0]])
     log('done.')
 
