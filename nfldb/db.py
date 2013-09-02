@@ -207,14 +207,19 @@ class Tx (object):
     (Or when interfacing with another part of the API that requires
     a database cursor.)
     """
-    def __init__(self, psycho_conn):
+    def __init__(self, psycho_conn, name=None, factory=None):
         tstatus = psycho_conn.get_transaction_status()
+        self.__name = name
         self.__nested = tstatus == TRANSACTION_STATUS_INTRANS
         self.__conn = psycho_conn
         self.__cursor = None
+        self.__factory = factory
+        if self.__factory is None:
+            self.__factory = self.__conn.cursor_factory
 
     def __enter__(self):
-        self.__cursor = self.__conn.cursor()
+        self.__cursor = self.__conn.cursor(name=self.__name,
+                                           cursor_factory=self.__factory)
         return self.__cursor
 
     def __exit__(self, typ, value, traceback):

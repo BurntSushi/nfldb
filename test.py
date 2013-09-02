@@ -16,13 +16,17 @@ db = nfldb.connect()
     # print g.gsis_id, g 
 
 q = nfldb.Query(db)
-q.games(season_type='Regular', season_year=2012, week=1)
+# q.games(season_type='Regular', season_year=2012, week=1) 
+q.games(season_type='Regular', season_year=2012)
+# q.drives(pos_time__ge=nfldb.PossessionTime.clock('11:00')) 
+# q.players(full_name='Tom Brady') 
+q.plays(rushing_yds__ge=70)
 ps = q.as_plays()
 
 print len(ps)
-print sum(len(p._play_players) for p in ps)
-for i in xrange(10):
-    print ps[i].description
-# for p in ps: print p.description 
+# print sum(len(p._play_players) for p in ps) 
+# for i in xrange(min(10, len(ps))): 
+    # print ps[i].pos_time 
+for p in ps: print p.down, p.description
 
 

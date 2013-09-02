@@ -521,7 +521,7 @@ class PossessionTime (object):
         if not self.valid:
             return 'N/A'
         else:
-            return '%d:%d' % (self.minutes, self.seconds)
+            return '%02d:%02d' % (self.minutes, self.seconds)
 
     def __lt__(self, other):
         assert self.valid and other.valid
@@ -856,6 +856,15 @@ class PlayPlayer (object):
         return play_player
 
     @staticmethod
+    def from_tuple(db, t):
+        cols = PlayPlayer._sql_fields
+        stats = {}
+        for i, v in enumerate(t[5:], 5):
+            if v > 0:
+                stats[cols[i]] = v
+        return PlayPlayer(db, t[0], t[1], t[2], t[3], t[4], stats)
+
+    @staticmethod
     def from_row(db, row):
         return PlayPlayer(db, row['gsis_id'], row['drive_id'],
                           row['play_id'], row['player_id'], row['team'], row)
@@ -910,12 +919,9 @@ class PlayPlayer (object):
         statistics in this play.
         """
         # Extract the relevant statistical categories only.
-        get = stats.get
         seta = setattr
-        for cat in _player_categories:
-            val = get(cat, 0)
-            if val > 0:
-                seta(self, cat, val)
+        for cat in stats:
+            seta(self, cat, stats[cat])
 
     @property
     def play(self):
@@ -991,6 +997,16 @@ class Play (object):
         for pp in p.players:
             play._play_players.append(PlayPlayer.from_nflgame(db, play, pp))
         return play
+
+    @staticmethod
+    def from_tuple(db, t):
+        cols = Play._sql_fields
+        stats = {}
+        for i, v in enumerate(t[12:], 12):
+            if v > 0:
+                stats[cols[i]] = v
+        return Play(db, t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8],
+                    t[9], t[10], t[11], stats)
 
     @staticmethod
     def from_row(db, row):
@@ -1081,8 +1097,9 @@ class Play (object):
         """The date and time that this play was last updated."""
 
         # Extract the relevant statistical categories only.
+        seta = setattr
         for cat in stats:
-            setattr(self, cat, stats[cat])
+            seta(self, cat, stats[cat])
 
     @property
     def drive(self):

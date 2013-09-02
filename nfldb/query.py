@@ -5,6 +5,8 @@ except ImportError:
     from ordereddict import OrderedDict
 import re
 
+from psycopg2.extensions import cursor as tuple_cursor
+
 from nfldb.db import Tx
 import nfldb.types as types
 
@@ -49,6 +51,17 @@ def _cond_where_sql(cursor, conds, tables):
     return pieces
 
 
+def _where_and(*exprs):
+    """
+    Given a list of SQL expressions, return a valid `WHERE` clause for
+    a SQL query with the exprs AND'd together.
+
+    Exprs that are empty are omitted.
+    """
+    anded = ' AND '.join('(%s)' % expr for expr in exprs if expr)
+    return _prefix_or_empty('WHERE ', anded)
+
+
 def _prefix_or_empty(prefix, s):
     if not s or len(s) == 0:
         return ''
@@ -57,19 +70,11 @@ def _prefix_or_empty(prefix, s):
 
 def _sql_pkey_in(cur, pkeys, ids, prefix=''):
     pkeys = ['%s%s' % (prefix, pk) for pk in pkeys]
-
     if len(ids) == 0:
         nulls = ', '.join(['NULL'] * len(pkeys))
         return '(%s) IN ((%s))' % (', '.join(pkeys), nulls)
-    r = '(%s) IN %s' % (', '.join(pkeys), cur.mogrify('%s', (tuple(ids),)))
-    # r = '(%s) = ANY(%s)' % (', '.join(pkeys), cur.mogrify('%s', (list(ids),))) 
 
-    # pkey = '(%s)' % (', '.join(pkeys)) 
-    # conds = [] 
-    # for idval in ids: 
-        # conds.append('%s = %s' % (pkey, cur.mogrify('%s', (idval,)))) 
-    # r = '(%s)' % (' OR '.join(conds)) 
-    return r
+    return '(%s) IN %s' % (', '.join(pkeys), cur.mogrify('%s', (tuple(ids),)))
 
 
 class Condition (object):
@@ -239,12 +244,14 @@ class Query (Condition):
         Executes the query and returns the results as a list of
         `nfldb.Game` objects.
         """
+        ids = self._ids('game')
         results = []
+        q = 'SELECT %s FROM game %s'
         with Tx(self._db) as cursor:
-            ids = self._ids(cursor, 'game')
-            q = 'SELECT %s FROM game WHERE %s' \
-                % (_select_fields('game', types.Game._sql_fields),
-                   _sql_pkey_in(cursor, ['gsis_id'], ids['game']))
+            q = q % (
+                _select_fields('game', types.Game._sql_fields),
+                _where_and(_sql_pkey_in(cursor, ['gsis_id'], ids['game'])),
+            )
             cursor.execute(q)
 
             for row in cursor.fetchall():
@@ -256,15 +263,17 @@ class Query (Condition):
         Executes the query and returns the results as a list of
         `nfldb.Drive` objects.
         """
+        ids = self._ids('drive')
         results = []
+        q = 'SELECT %s FROM drive %s'
         with Tx(self._db) as cursor:
-            ids = self._ids(cursor, 'drive')
-            q = 'SELECT %s FROM drive WHERE %s %s' \
-                % (_select_fields('drive', types.Drive._sql_fields),
-                   _sql_pkey_in(cursor, ['gsis_id'], ids['game']),
-                   _prefix_or_empty(
-                       ' AND ',
-                       _sql_pkey_in(cursor, ['drive_id'], ids['drive'])))
+            pkey = _sql_pkey_in(cursor, ['gsis_id', 'drive_id'], ids['drive'])
+            if pkey is None:
+                pkey = _sql_pkey_in(cursor, ['gsis_id'], ids['game'])
+            q = q % (
+                _select_fields('drive', types.Drive._sql_fields),
+                _where_and(pkey),
+            )
             cursor.execute(q)
 
             for row in cursor.fetchall():
@@ -283,29 +292,38 @@ class Query (Condition):
                                        types.PlayPlayer._sql_fields)
 
         plays = OrderedDict() 
-        with Tx(self._db) as cursor:
-            ids = self._ids(cursor, 'play')
-            playids = set(ids['play'])
+        ids = self._ids('play')
+        playids = set(ids['play'])
 
-            gameids = _sql_pkey_in(cursor, ['gsis_id'], ids['game'])
-            driveids = _prefix_or_empty(
-                ' AND ', _sql_pkey_in(cursor, ['drive_id'], ids['drive']))
+        # with Tx(self._db, name='plays') as cursor: 
+        with Tx(self._db, factory=tuple_cursor) as cursor:
+            pkey = None
+            if len(ids['drive']) < 5000:
+                pkey = _sql_pkey_in(cursor, ['gsis_id', 'drive_id'],
+                                    ids['drive'])
+            if pkey is None:
+                pkey = _sql_pkey_in(cursor, ['gsis_id'], ids['game'])
 
             cursor.execute('''
-                SELECT %s FROM play WHERE %s %s
+                SELECT %s FROM play %s
                 ORDER BY gsis_id, drive_id, play_id
-            ''' % (play_fields, gameids, driveids))
-            for row in cursor.fetchall():
-                if row['play_id'] in playids:
-                    plays[row['play_id']] = types.Play.from_row(self._db, row)
+            ''' % (play_fields, _where_and(pkey)))
+            init = types.Play.from_tuple
+            for t in cursor.fetchall():
+                pid = (t[0], t[1], t[2])
+                if pid in playids:
+                    plays[pid] = init(self._db, t)
 
+        with Tx(self._db, factory=tuple_cursor) as cursor:
             cursor.execute('''
-                SELECT %s FROM play_player WHERE %s %s
-            ''' % (player_fields, gameids, driveids))
-            for row in cursor.fetchall():
-                if row['play_id'] in playids:
-                    pp = types.PlayPlayer.from_row(self._db, row)
-                    plays[row['play_id']]._play_players.append(pp)
+                SELECT %s FROM play_player %s
+            ''' % (player_fields, _where_and(pkey)))
+            init = types.PlayPlayer.from_tuple
+            for t in cursor.fetchall():
+                pid = (t[0], t[1], t[2])
+                if pid in playids:
+                    pp = init(self._db, t)
+                    plays[pid]._play_players.append(pp)
         return plays.values()
 
 
@@ -314,12 +332,14 @@ class Query (Condition):
         Executes the query and returns the results as a list of
         `nfldb.Player` objects.
         """
+        ids = self._ids('player')
         results = []
+        q = 'SELECT %s FROM player %s'
         with Tx(self._db) as cursor:
-            ids = self._ids(cursor, 'player')
-            q = 'SELECT %s FROM player WHERE %s' \
-                % (_select_fields('player', types.Player._sql_fields),
-                   _sql_pkey_in(cursor, ['player_id'], ids['player']))
+            q = q % (
+                _select_fields('player', types.Player._sql_fields),
+                _where_and(_sql_pkey_in(cursor, ['player_id'], ids['player'])),
+            )
             cursor.execute(q)
 
             for row in cursor.fetchall():
@@ -347,7 +367,7 @@ class Query (Condition):
             return ''
         return '(%s)' % (' OR '.join(disjunctions))
 
-    def _ids(self, cur, as_table):
+    def _ids(self, as_table):
         """
         Returns a dictionary of primary keys matching the criteria
         specified in this query for the following tables: game, drive,
@@ -357,105 +377,135 @@ class Query (Condition):
         Each tuple contains primary key values for that table. In the
         case of the `drive` and `play` table, those values are tuples.
         """
-        def pkin(pkeys, ids, prefix=''):
-            return _sql_pkey_in(cur, pkeys, ids, prefix=prefix)
-
         # Initialize sets to `None`. This distinguishes an empty result
         # set and a lack of search.
         game, drive, play, player = [None] * 4
-        tables = self._tables()
-        tables.add(as_table)
 
-        # Start with games since it has the smallest space.
-        if 'game' in tables:
-            game = set()
-            cur.execute(
-                'SELECT gsis_id FROM game %s'
-                % _prefix_or_empty('WHERE ', self._sql_where(cur, ['game'])))
-            for row in cur.fetchall():
-                game.add(row['gsis_id'])
+        with Tx(self._db, factory=tuple_cursor) as cur:
+            def pkin(pkeys, ids, prefix=''):
+                return _sql_pkey_in(cur, pkeys, ids, prefix=prefix)
 
-        # Filter by drive...
-        if 'drive' in tables:
-            conds = []
-            if game is not None:
-                conds.append(pkin(['gsis_id'], game))
-            if drive is not None:
-                conds.append(pkin(['gsis_id', 'drive_id'], drive))
+            # Look at what tables are being queried and fetch identifiers
+            # based on it. Always assume that the table containing data we're
+            # ultimately gathering is included.
+            tables = self._tables()
+            tables.add(as_table)
 
-            where = _prefix_or_empty(' AND ', self._sql_where(cur, ['drive']))
-            cur.execute('''
-                SELECT gsis_id, drive_id
-                FROM drive
-                WHERE %s %s
-            ''' % (' AND '.join(conds), where))
+            # Start with games since it has the smallest space.
+            if 'game' in tables:
+                game = set()
+                cur.execute(
+                    'SELECT gsis_id FROM game %s'
+                    % _where_and(self._sql_where(cur, ['game'])))
+                for row in cur.fetchall():
+                    game.add(row[0])
 
-            game, drive = set(), set()
-            for row in cur.fetchall():
-                game.add(row['gsis_id'])
-                drive.add(row['drive_id'])
+            # Filter by drive...
+            if 'drive' in tables:
+                idexp = None
+                if game is not None:
+                    idexp = pkin(['gsis_id'], game)
 
-        # Filter by play.
-        # This is a little messed, since we're searching on the `play`
-        # and `play_player` tables.
-        if 'play' in tables:
-            conds = []
-            if game is not None:
-                conds.append(pkin(['gsis_id'], game, prefix='play_player.'))
-            if drive is not None:
-                conds.append(pkin(['drive_id'], drive, prefix='play_player.'))
-            if play is not None:
-                conds.append(pkin(['play_id'], play, prefix='play_player.'))
+                cur.execute('''
+                    SELECT gsis_id, drive_id
+                    FROM drive
+                    %s
+                ''' % (_where_and(idexp, self._sql_where(cur, ['drive']))))
 
-            where = _prefix_or_empty(
-                ' AND ', self._sql_where(cur, ['play', 'play_player']))
-            cur.execute('''
-                SELECT
-                    play_player.gsis_id, play_player.drive_id,
-                    play_player.play_id, play_player.player_id
-                FROM play_player
-                LEFT JOIN play
-                ON play_player.gsis_id = play.gsis_id
-                    AND play_player.drive_id = play.drive_id
-                    AND play_player.play_id = play.play_id
-                WHERE %s %s
-            ''' % (' AND '.join(conds), where))
+                game, drive = set(), set()
+                for row in cur.fetchall():
+                    game.add(row[0])
+                    drive.add((row[0], row[1]))
 
-            game, drive, play = set(), set(), set()
-            for row in cur.fetchall():
-                game.add(row['gsis_id'])
-                drive.add(row['drive_id'])
-                play.add(row['play_id'])
+            # Filter by play.
+            # This is a little messed, since we're searching on the `play`
+            # and `play_player` tables.
+            if 'play' in tables:
+                ide = None
+                if drive is not None:
+                    ide = pkin(['gsis_id', 'drive_id'], drive)
+                elif game is not None:
+                    ide = pkin(['gsis_id'], game)
 
-        # Finally filter by player.
-        if 'player' in tables:
-            # Cut down the game/drive/play ids to only what the players
-            # participated in.
-            conds = []
-            if game is not None:
-                conds.append(pkin(['gsis_id'], game, prefix='play_player.'))
-            if drive is not None:
-                conds.append(pkin(['drive_id'], drive, prefix='play_player.'))
-            if play is not None:
-                conds.append(pkin(['play_id'], play, prefix='play_player.'))
+                # Wipe the slate clean. We'll rebuild the sets below.
+                game, drive, play = set(), set(), set()
 
-            where = _prefix_or_empty(' AND ', self._sql_where(cur, ['player']))
-            cur.execute('''
-                SELECT
-                    play_player.gsis_id, play_player.drive_id,
-                    play_player.play_id, play_player.player_id
-                FROM play_player
-                LEFT JOIN player
-                ON play_player.player_id = player.player_id
-                WHERE %s %s
-            ''' % (' AND '.join(conds), where))
+                # When there are no criteria for `play_player`, then we've
+                # got to make sure to always hit the `play` table.
+                # Otherwise, we only hit the `play` table when it's in the
+                # criteria. This is to allow for pathological `as_plays` calls
+                # with no criteria to work as expected.
+                if 'play_player' not in tables or 'play' in self._tables():
+                    q = '''
+                        SELECT
+                            play.gsis_id, play.drive_id, play.play_id
+                        FROM play
+                        %s
+                    ''' % (_where_and(ide, self._sql_where(cur, ['play'])))
+                    cur.execute(q)
 
-            game, drive, play, player = set(), set(), set(), set()
-            for row in cur.fetchall():
-                game.add(row['gsis_id'])
-                drive.add(row['drive_id'])
-                play.add(row['play_id'])
-                player.add(row['player_id'])
+                    for row in cur.fetchall():
+                        game.add(row[0])
+                        drive.add((row[0], row[1]))
+                        play.add((row[0], row[1], row[2]))
+
+                if 'play_player' in tables:
+                    where = self._sql_where(cur, ['play_player'])
+                    q = '''
+                        SELECT
+                            gsis_id, drive_id, play_id
+                        FROM play_player
+                        %s
+                    ''' % (_where_and(ide, where))
+                    cur.execute(q)
+                    pp_game, pp_drive, pp_play = set(), set(), set()
+                    for row in cur.fetchall():
+                        pp_game.add(row[0])
+                        pp_drive.add((row[0], row[1]))
+                        pp_play.add((row[0], row[1], row[2]))
+                    game = game.intersection(pp_game)
+                    drive = drive.intersection(pp_drive)
+                    play = play.intersection(pp_play)
+
+            # Finally filter by player.
+            if 'player' in tables:
+                # Cut down the game/drive/play ids to only what the players
+                # participated in.
+                idexp = None
+                old_playids = None if play is None else play.copy()
+                old_drvids = None if drive is None else drive.copy()
+
+                if drive is not None and len(drive) < 5000:
+                    idexp = pkin(['gsis_id', 'drive_id'], drive)
+                elif game is not None:
+                    idexp = pkin(['gsis_id'], game)
+
+                cur.execute('''
+                    SELECT player_id FROM player %s
+                ''' % (_where_and(self._sql_where(cur, ['player']))))
+                player = set()
+                for row in cur.fetchall():
+                    player.add(row[0])
+
+                cur.execute('''
+                    SELECT gsis_id, drive_id, play_id, player_id
+                    FROM play_player %s
+                ''' % (_where_and(idexp, pkin(['player_id'], player))))
+
+                game, drive, play, player = set(), set(), set(), set()
+                for row in cur.fetchall():
+                    pid = (row[0], row[1], row[2])
+                    if old_playids is not None and pid not in old_playids:
+                        continue
+
+                    drvid = (row[0], row[1])
+                    if old_drvids is not None and drvid not in old_drvids:
+                        continue
+
+                    game.add(row[0])
+                    drive.add(drvid)
+                    play.add(pid)
+                    player.add(row[3])
 
         return {
             'game': tuple(game or []), 'drive': tuple(drive or []),
