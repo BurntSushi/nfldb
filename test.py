@@ -25,7 +25,7 @@ db = nfldb.connect()
 # games = q.as_play_players() 
 
 q = nfldb.Query(db)
-q.games(season_type='Regular')
+q.games(season_type='Regular', season_year=2012)
 q.players(position='QB')
 pps = q.as_aggregate(sortby='passing_tds', limit=10)
 for pp in pps: print pp.player, pp.passing_yds, pp.passing_att, pp.passing_tds
