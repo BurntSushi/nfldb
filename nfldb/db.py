@@ -78,7 +78,8 @@ def connect(database=None, user=None, password=None, host=None, port=None,
     set_timezone(conn, 'UTC')
     _migrate(conn, api_version)
 
-    set_timezone(conn, timezone)
+    if timezone is not None:
+        set_timezone(conn, timezone)
 
     # Bind SQL -> Python casting functions.
     from nfldb.types import Clock, _Enum, Enums, FieldPosition, PossessionTime
