@@ -23,7 +23,30 @@ def _select_fields(prefix, fields):
     return ', '.join('%s.%s' % (prefix, field) for field in fields)
 
 
-def _append_conds(conds, table, keys, kwargs):
+def aggregate(objs):
+    """
+    Given any collection of Python objects that provide a
+    `play_players` attribute, `aggregate` will return a list of
+    `PlayPlayer` objects with statistics aggregated over each player.
+    (As a special case, if an element in `objs` is itself a
+    `nfldb.PlayPlayer` object, then it is used and a `play_players`
+    attribute is not rquired.)
+
+    For example, `objs` could be a mixed list of `nfldb.Game` and
+    `nfldb.Play` objects.
+
+    The order of the list returned is stable with respect to the
+    order of players obtained from each element in `objs`.
+    """
+    summed = OrderedDict()
+    for obj in objs:
+        pps = [obj] if isinstance(obj, types.PlayPlayer) else obj.play_players
+        for pp in pps:
+            if pp.player_id not in summed:
+                summed[pp.player_id] = pp._copy()
+            else:
+                summed[pp.player_id]._add(pp)
+    return summed.values()
     """
     Adds `nfldb.Condition` objects to the condition list `conds` for
     the `table`. Only the values in `kwargs` that correspond to keys in

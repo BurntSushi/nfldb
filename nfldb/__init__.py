@@ -8,7 +8,7 @@ from nfldb.db import __pdoc__ as __db_pdoc__
 from nfldb.db import api_version, connect, now, set_timezone, schema_version
 from nfldb.db import Tx
 from nfldb.query import __pdoc__ as __query_pdoc__
-from nfldb.query import Query
+from nfldb.query import aggregate, Query
 from nfldb.types import __pdoc__ as __types_pdoc__
 from nfldb.types import stat_categories
 from nfldb.types import Category, Clock, Enums, Drive, FieldPosition, Game
@@ -27,7 +27,7 @@ __all__ = [
     'Tx',
 
     # nfldb.query
-    'Query',
+    'aggregate', 'Query',
 
     # nfldb.types
     'stat_categories',
