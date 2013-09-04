@@ -16,7 +16,6 @@ categories = [
     (89, False, "player", "defense_safe", "Tackle by a defensive player that resulted in a safety. This is in addition to a tackle."),
     (84, True, "player", "defense_sk", "Defensive player sacked the quarterback."),
     (84, False, "player", "defense_sk_yds", "Yards lost as a result of a sack."),
-    (64, False, "player", "defense_tds", "Any touchdown by a defensive player. (This includes defense_frec_tds, defense_int_tds, etc.)"),
     (80, False, "player", "defense_tkl", "A defensive player tackle. (This include defense_tkl_primary.)"),
     (120, False, "player", "defense_tkl_loss", "Defensive player tackled the runner behind the line of scrimmage. Play must have ended, player must have received a tackle stat, has to be an offensive player tackled."),
     (402, False, "player", "defense_tkl_loss_yds", "The number of yards lost caused by a defensive tackle behind the line of scrimmage."),
