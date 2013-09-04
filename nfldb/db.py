@@ -315,6 +315,25 @@ def _upsert(cursor, table, data, pk):
         raise e
 
 
+def _drop_stat_indexes(c):
+    from nfldb.types import _play_categories, _player_categories
+
+    for cat in _player_categories.values():
+        c.execute('DROP INDEX play_player_in_%s' % cat)
+    for cat in _play_categories.values():
+        c.execute('DROP INDEX play_in_%s' % cat)
+
+
+def _create_stat_indexes(c):
+    from nfldb.types import _play_categories, _player_categories
+
+    for cat in _player_categories.values():
+        c.execute('CREATE INDEX play_player_in_%s ON play_player (%s ASC)'
+                  % (cat, cat))
+    for cat in _play_categories.values():
+        c.execute('CREATE INDEX play_in_%s ON play (%s ASC)' % (cat, cat))
+
+
 # What follows are the migration functions. They follow the naming
 # convention "_migrate_{VERSION}" where VERSION is an integer that
 # corresponds to the version that the schema will be after the
@@ -580,13 +599,7 @@ def _migrate_2(c):
 
 
 def _migrate_3(c):
-    from nfldb.types import _play_categories, _player_categories
-
-    for cat in _player_categories.values():
-        c.execute('CREATE INDEX play_player_in_%s ON play_player (%s ASC)'
-                  % (cat, cat))
-    for cat in _play_categories.values():
-        c.execute('CREATE INDEX play_in_%s ON play (%s ASC)' % (cat, cat))
+    _create_stat_indexes(c)
 
     c.execute('''
         CREATE INDEX player_in_gsis_name ON player (gsis_name ASC);
