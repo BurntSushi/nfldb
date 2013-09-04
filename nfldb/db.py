@@ -1,6 +1,8 @@
 from __future__ import absolute_import, division, print_function
+import ConfigParser
 import datetime
-
+import os
+import os.path as path
 import re
 import sys
 
@@ -10,8 +12,6 @@ from psycopg2.extensions import TRANSACTION_STATUS_INTRANS
 from psycopg2.extensions import new_type, register_type
 
 import pytz
-
-import toml
 
 import nfldb.team
 
@@ -27,12 +27,50 @@ __pdoc__['api_version'] = \
     """
 
 
+def config(fp=''):
+    """
+    Reads and loads the configuration file containing PostgreSQL
+    connection information. This function is used automatically
+    by `nfldb.connect`.
+
+    The return value is a dictionary mapping a key in the configuration
+    file to its corresponding value. All values are strings, except for
+    `port`, which is always an integer.
+
+    A total of three possible file paths are tried before
+    giving up and returning `None`. The file paths, in
+    order, are: `fp`, `/etc/xdg/nfldb/config.ini` and
+    `$XDG_CONFIG_HOME/nfldb/config.ini`.
+    """
+    paths = [
+        fp,
+        path.join('/', 'etc', 'xdg', 'nfldb', 'config.ini'),
+        path.join(os.getenv('XDG_CONFIG_HOME'), 'nfldb', 'config.ini'),
+    ]
+    cp = ConfigParser.RawConfigParser()
+    for p in paths:
+        try:
+            with open(p) as fp:
+                cp.readfp(fp)
+                return {
+                    'timezone': cp.get('pgsql', 'timezone'),
+                    'database': cp.get('pgsql', 'database'),
+                    'user': cp.get('pgsql', 'user'),
+                    'password': cp.get('pgsql', 'password'),
+                    'host': cp.get('pgsql', 'host'),
+                    'port': cp.getint('pgsql', 'port'),
+                }
+        except IOError:
+            pass
+    return None
+
+
 def connect(database=None, user=None, password=None, host=None, port=None,
             timezone=None):
     """
     Returns a `psycopg2._psycopg.connection` object from the
     `psycopg2.connect`. If database is `None`, then `connect` will look
-    for a configuration file at `$XDG_CONFIG_HOME/nfldb/config.toml`
+    for a configuration file at `$XDG_CONFIG_HOME/nfldb/config.ini`
     with the database connection information. Otherwise, the connection
     will use the parameters given.
 
@@ -49,20 +87,17 @@ def connect(database=None, user=None, password=None, host=None, port=None,
     PostgreSQL will accept. Select from the `pg_timezone_names` view
     to get a list of valid time zones. (Like the other parameters,
     when `database` is `None`, the `timezone` parameter is filled from
-    `config.toml`.)
+    `config.ini`.)
     """
     if database is None:
-        try:
-            conf = toml.loads(open('config.toml').read())
-        except:
-            print("Invalid configuration file format.", file=sys.stderr)
+        conf = config()
+        if conf is None:
+            print("Could not find valid configuration file.", file=sys.stderr)
             sys.exit(1)
-        database = conf['pgsql'].get('database', None)
-        user = conf['pgsql'].get('user', None)
-        password = conf['pgsql'].get('password', None)
-        host = conf['pgsql'].get('host', None)
-        port = conf['pgsql'].get('port', None)
-        timezone = conf.get('timezone', 'US/Eastern')
+        timezone, database = conf['timezone'], conf['database']
+        user, password = conf['user'], conf['password']
+        host, port = conf['host'], conf['port']
+
     conn = psycopg2.connect(database=database, user=user, password=password,
                             host=host, port=port,
                             cursor_factory=RealDictCursor)

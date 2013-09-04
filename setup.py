@@ -3,7 +3,7 @@ from distutils.core import setup
 from glob import glob
 import os.path as path
 
-install_requires = ['nflgame', 'toml', 'psycopg2', 'enum34']
+install_requires = ['nflgame', 'psycopg2', 'enum34']
 try:
     import argparse
 except ImportError:
