@@ -132,6 +132,27 @@ def _as_row(fields, obj):
     return [(f, getattr(obj, f, None)) for f in fields if f not in exclude]
 
 
+def _select_fields(tabtype, prefix=None):
+    sql = lambda f: tabtype._as_sql(f, prefix=prefix)
+    select = [sql(f) for f in tabtype._sql_columns]
+    select += ['%s AS %s' % (sql(f), f) for f in tabtype._sql_derived]
+    return ', '.join(select)
+
+
+def _sum_fields(tabtype, prefix=None):
+    assert tabtype in (Play, PlayPlayer)
+
+    if tabtype == Play:
+        fields = _play_categories.keys()
+    else:
+        fields = _player_categories.keys()
+    fields += tabtype._sql_derived
+
+    sql = lambda f: 'SUM(%s)' % tabtype._as_sql(f, prefix=prefix)
+    select = ['%s AS %s' % (sql(f), f) for f in fields]
+    return ', '.join(select)
+
+
 class _Enum (enum.Enum):
     """
     Conforms to the `getquoted` interface in psycopg2.
@@ -437,10 +458,10 @@ class FieldPosition (object):
     def __str__(self):
         if not self.valid:
             return 'N/A'
-        elif self.offset > 0:
-            return 'OPP %d' % (50 - self.offset)
-        elif self.offset < 0:
-            return 'OWN %d' % (50 + self.offset)
+        elif self.__offset > 0:
+            return 'OPP %d' % (50 - self.__offset)
+        elif self.__offset < 0:
+            return 'OWN %d' % (50 + self.__offset)
         else:
             return 'MIDFIELD'
 
@@ -675,11 +696,17 @@ class Player (object):
     of the player meta data is scraped from NFL.com's team roster
     pages (which invites infrequent uncertainty).
     """
-    _sql_fields = ['player_id', 'gsis_name', 'full_name', 'first_name',
-                   'last_name', 'team', 'position', 'profile_id',
-                   'profile_url', 'uniform_number', 'birthdate', 'college',
-                   'height', 'weight', 'years_pro', 'status',
-                   ]
+    _table = 'player'
+
+    _sql_columns = ['player_id', 'gsis_name', 'full_name', 'first_name',
+                    'last_name', 'team', 'position', 'profile_id',
+                    'profile_url', 'uniform_number', 'birthdate', 'college',
+                    'height', 'weight', 'years_pro', 'status',
+                    ]
+
+    _sql_derived = []
+
+    _sql_fields = _sql_columns + _sql_derived
 
     __slots__ = _sql_fields + ['_db']
 
@@ -689,6 +716,13 @@ class Player (object):
     This is only used when saving data to detect if a player
     needs to be added.
     """
+
+    @staticmethod
+    def _as_sql(field, prefix=None):
+        prefix = 'player.' if prefix is None else prefix
+        if field in Player._sql_columns:
+            return '%s%s' % (prefix, field)
+        raise AttributeError(field)
 
     @staticmethod
     def _from_nflgame(db, p):
@@ -715,6 +749,9 @@ class Player (object):
             trans = Enums._nflgame_player_status
             kwargs['status'] = trans.get(kwargs['status'] or '',
                                          Enums.player_status.Unknown)
+
+        if kwargs.get('position', None) is None:
+            kwargs['position'] = Enums.player_pos.UNK
         if kwargs.get('status', None) is None:
             kwargs['status'] = Enums.player_status.Unknown
 
@@ -743,6 +780,22 @@ class Player (object):
                       r['position'], r['profile_id'], r['profile_url'],
                       r['uniform_number'], r['birthdate'], r['college'],
                       r['height'], r['weight'], r['years_pro'], r['status'])
+
+    @staticmethod
+    def from_id(db, player_id):
+        """
+        Given a player GSIS identifier (e.g., `00-0019596`) as a string,
+        returns a `nfldb.Player` object corresponding to `player_id`.
+
+        If no corresponding player is found, `None` is returned.
+        """
+        with Tx(db) as cursor:
+            cursor.execute('''
+                SELECT %s FROM player WHERE player_id = %s
+            ''' % (_select_fields(Player), '%s'), (player_id,))
+            if cursor.rowcount > 0:
+                return Player.from_row(db, cursor.fetchone())
+        return None
 
     def __init__(self, db, player_id, gsis_name, full_name=None,
                  first_name=None, last_name=None, team=None, position=None,
@@ -815,7 +868,7 @@ class Player (object):
 
     @property
     def _row(self):
-        return _as_row(Player._sql_fields, self)
+        return _as_row(Player._sql_columns, self)
 
     def _save(self, cursor):
         if Player.__existing is None:
@@ -828,13 +881,77 @@ class Player (object):
             _upsert(cursor, 'player', vals, [vals[0]])
             Player.__existing.add(self.player_id)
 
+    def __str__(self):
+        name = self.full_name if self.full_name else self.gsis_name
+        if not name:
+            name = self.player_id  # Yikes.
+        return '%s (%s, %s)' % (name, self.team, self.position)
+
+    def __eq__(self, other):
+        return self.player_id == other.player_id
+
+    def __lt__(self, other):
+        if self.full_name and other.full_name:
+            return self.full_name < other.full_name
+        return self.gsis_name < other.gsis_name
+
 
 class PlayPlayer (object):
-    _sql_fields = (['gsis_id', 'drive_id', 'play_id', 'player_id', 'team']
-                   + _player_categories.keys()
-                   )
+    _table = 'play_player'
+
+    _sql_columns = (['gsis_id', 'drive_id', 'play_id', 'player_id', 'team']
+                    + _player_categories.keys()
+                    )
+
+    _sql_derived = ['offense_yds', 'offense_tds']
+
+    # Define various additive combinations of fields.
+    # Abuse the additive identity.
+    _derived_sums = {
+        'offense_yds': ['passing_yds', 'rushing_yds', 'receiving_yds',
+                        'fumbles_rec_yds'],
+        'offense_tds': ['passing_tds', 'receiving_tds', 'rushing_tds',
+                        'fumbles_rec_tds'],
+        'defense_tds': ['defense_frec_tds', 'defense_int_tds',
+                        'defense_misc_tds'],
+    }
+
+    _sql_fields = _sql_columns + _sql_derived
 
     __slots__ = _sql_fields + ['_db', '_play', '_player']
+
+    # Document instance variables for derived SQL fields.
+    __pdoc__['PlayPlayer.offense_yds'] = \
+        '''
+        Corresponds to any yardage that is manufactured by the offense.
+        Namely, the following fields:
+        `nfldb.PlayPlayer.passing_yds`,
+        `nfldb.PlayPlayer.rushing_yds`,
+        `nfldb.PlayPlayer.receiving_yds` and
+        `nfldb.PlayPlayer.fumbles_rec_yds`.
+
+        This field is useful when searching for plays by net yardage
+        regardless of how the yards were obtained.
+        '''
+    __pdoc__['PlayPlayer.offense_tds'] = \
+        '''
+        Corresponds to any touchdown manufactured by the offense.
+        '''
+    __pdoc__['PlayPlayer.defense_tds'] = \
+        '''
+        Corresponds to any touchdown manufactured by the defense.
+        e.g., a pick-6, fumble recovery TD, punt/FG block TD, etc.
+        '''
+
+    @staticmethod
+    def _as_sql(field, prefix=None):
+        prefix = 'play_player.' if prefix is None else prefix
+        if field in PlayPlayer._sql_columns:
+            return '%s%s' % (prefix, field)
+        elif field in PlayPlayer._derived_sums:
+            tosum = PlayPlayer._derived_sums[field]
+            return ' + '.join('%s%s' % (prefix, f) for f in tosum)
+        raise AttributeError(field)
 
     @staticmethod
     def _from_nflgame(db, p, pp):
@@ -844,8 +961,8 @@ class PlayPlayer (object):
         converts `pp` to a `nfldb.PlayPlayer` object.
         """
         stats = {}
-        for k in _player_categories:
-            if pp._stats.get(k, 0) > 0:
+        for k in _player_categories.keys() + PlayPlayer._sql_derived:
+            if pp._stats.get(k, 0) != 0:
                 stats[k] = pp._stats[k]
 
         team = nfldb.team.standard_team(pp.team)
@@ -860,7 +977,7 @@ class PlayPlayer (object):
         cols = PlayPlayer._sql_fields
         stats = {}
         for i, v in enumerate(t[5:], 5):
-            if v > 0:
+            if v != 0:
                 stats[cols[i]] = v
         return PlayPlayer(db, t[0], t[1], t[2], t[3], t[4], stats)
 
@@ -918,7 +1035,6 @@ class PlayPlayer (object):
         The team that this player belonged to when he recorded the
         statistics in this play.
         """
-        # Extract the relevant statistical categories only.
         seta = setattr
         for cat in stats:
             seta(self, cat, stats[cat])
@@ -947,12 +1063,7 @@ class PlayPlayer (object):
 
     @property
     def _row(self):
-        return _as_row(PlayPlayer._sql_fields, self)
-
-    def __getattr__(self, k):
-        if k in _player_categories:
-            return 0
-        raise AttributeError
+        return _as_row(PlayPlayer._sql_columns, self)
 
     def _save(self, cursor):
         vals = self._row
@@ -960,15 +1071,83 @@ class PlayPlayer (object):
         if self._player is not None:
             self._player._save(cursor)
 
+    def _add(self, b):
+        """
+        Given two `nfldb.PlayPlayer` objects, `_add` accumulates `b`
+        into `self`. Namely, no new `nfldb.PlayPlayer` objects are
+        created.
+
+        Both `self` and `b` must refer to the same player, or else an
+        assertion error is raised.
+        """
+        a = self
+        assert a.player_id == b.player_id
+        a.gsis_id = a.gsis_id if a.gsis_id == b.gsis_id else None
+        a.drive_id = a.drive_id if a.drive_id == b.drive_id else None
+        a.play_id = a.play_id if a.play_id == b.play_id else None
+        a.team = a.team if a.team == b.team else None
+
+        for cat in _player_categories:
+            s = getattr(a, cat) + getattr(b, cat)
+            if s != 0:
+                setattr(a, cat, s)
+
+        # Try to copy player meta data too.
+        if a._player is None and b._player is not None:
+            a._player = b._player
+
+        # A play attached to aggregate statistics is always wrong.
+        a._play = None
+
+    def _copy(self):
+        """Returns a copy of `self`."""
+        stats = dict([(k, getattr(self, k, 0)) for k in _player_categories])
+        pp = PlayPlayer(self._db, self.gsis_id, self.drive_id, self.play_id,
+                        self.player_id, self.team, stats)
+        pp._player = self._player
+        pp._play = self._play
+        return pp
+
+    def __add__(self, b):
+        pp = self._copy()
+        pp.add(b)
+        return pp
+
+    def __str__(self):
+        d = {}
+        for cat in _player_categories:
+            v = getattr(self, cat, 0)
+            if v != 0:
+                d[cat] = v
+        return repr(d)
+
+    def __getattr__(self, k):
+        if k in PlayPlayer.__slots__:
+            return 0
+        raise AttributeError
+
 
 class Play (object):
-    _sql_fields = (['gsis_id', 'drive_id', 'play_id', 'time', 'pos_team',
-                    'yardline', 'down', 'yards_to_go', 'description', 'note',
-                    'time_inserted', 'time_updated',
-                    ] + _play_categories.keys()
-                   )
+    _table = 'play'
+
+    _sql_columns = (['gsis_id', 'drive_id', 'play_id', 'time', 'pos_team',
+                     'yardline', 'down', 'yards_to_go', 'description', 'note',
+                     'time_inserted', 'time_updated',
+                     ] + _play_categories.keys()
+                    )
+
+    _sql_derived = []
+
+    _sql_fields = _sql_columns + _sql_derived
 
     __slots__ = _sql_fields + ['_db', '_drive', '_play_players']
+
+    @staticmethod
+    def _as_sql(field, prefix=None):
+        prefix = 'play.' if prefix is None else prefix
+        if field in Play._sql_columns:
+            return '%s%s' % (prefix, field)
+        raise AttributeError(field)
 
     @staticmethod
     def _from_nflgame(db, d, p):
@@ -978,8 +1157,8 @@ class Play (object):
         `nfldb.Play` object.
         """
         stats = {}
-        for k in _play_categories:
-            if p._stats.get(k, 0) > 0:
+        for k in _play_categories.keys() + Play._sql_derived:
+            if p._stats.get(k, 0) != 0:
                 stats[k] = p._stats[k]
 
         # Fix up some fields so they meet the constraints of the schema.
@@ -1005,7 +1184,7 @@ class Play (object):
         cols = Play._sql_fields
         stats = {}
         for i, v in enumerate(t[12:], 12):
-            if v > 0:
+            if v != 0:
                 stats[cols[i]] = v
         return Play(db, t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8],
                     t[9], t[10], t[11], stats)
@@ -1015,7 +1194,7 @@ class Play (object):
         stats = {}
         get = row.get
         for cat in _play_categories:
-            if get(cat, 0) > 0:
+            if get(cat, 0) != 0:
                 stats[cat] = row[cat]
         return Play(db, row['gsis_id'], row['drive_id'], row['play_id'],
                     row['time'], row['pos_team'], row['yardline'],
@@ -1028,14 +1207,15 @@ class Play (object):
         """
         Given a GSIS identifier (e.g., `2012090500`) as a string,
         an integer drive id and an integer play id, this returns a
-        `nfldb.Play` object corresponding to `id`.
+        `nfldb.Play` object corresponding to the given identifiers.
 
         If no corresponding play is found, then `None` is returned.
         """
         with Tx(db) as cursor:
-            cursor.execute('''
-                SELECT * FROM play WHERE (gsis_id, drive_id, play_id) = %s
-            ''', ((gsis_id, drive_id, play_id),))
+            q = '''
+                SELECT %s FROM play WHERE (gsis_id, drive_id, play_id) = %s
+            ''' % (_select_fields(Play), '%s')
+            cursor.execute(q, ((gsis_id, drive_id, play_id),))
             if cursor.rowcount > 0:
                 return Play.from_row(db, cursor.fetchone())
         return None
@@ -1115,7 +1295,6 @@ class Play (object):
         self.time_updated = time_updated
         """The date and time that this play was last updated."""
 
-        # Extract the relevant statistical categories only.
         seta = setattr
         for cat in stats:
             seta(self, cat, stats[cat])
@@ -1143,10 +1322,12 @@ class Play (object):
         if self._play_players is None:
             self._play_players = []
             with Tx(self._db) as cursor:
-                cursor.execute('''
-                    SELECT * FROM play_player
+                q = '''
+                    SELECT %s FROM play_player
                     WHERE (gsis_id, drive_id, play_id) = %s
-                ''', ((self.gsis_id, self.drive_id, self.play_id),))
+                ''' % (_select_fields(PlayPlayer), '%s')
+                cursor.execute(
+                    q, ((self.gsis_id, self.drive_id, self.play_id),))
                 for row in cursor.fetchall():
                     pp = PlayPlayer.from_row(self._db, row)
                     pp._play = self
@@ -1155,12 +1336,7 @@ class Play (object):
 
     @property
     def _row(self):
-        return _as_row(Play._sql_fields, self)
-
-    def __getattr__(self, k):
-        if k in _play_categories:
-            return 0
-        raise AttributeError
+        return _as_row(Play._sql_columns, self)
 
     def _save(self, cursor):
         vals = self._row
@@ -1176,16 +1352,52 @@ class Play (object):
         for pp in (self._play_players or []):
             pp._save(cursor)
 
+    def __str__(self):
+        if self.down:
+            return '(%s, %s, %s, %d and %d) %s' \
+                   % (self.pos_team, self.yardline, self.time.phase,
+                      self.down, self.yards_to_go, self.description)
+        elif self.pos_team:
+            return '(%s, %s, %s) %s' \
+                   % (self.pos_team, self.yardline, self.time.phase,
+                      self.description)
+        else:
+            return '(%s) %s' % (self.time.phase, self.description)
+
+    def __getattr__(self, k):
+        if k in Play.__slots__:
+            return 0
+        if k in PlayPlayer.__slots__:
+            for pp in self.play_players:
+                v = getattr(pp, k)
+                if v != 0:
+                    return v
+            return 0
+        raise AttributeError(k)
+
 
 class Drive (object):
-    _sql_fields = ['gsis_id', 'drive_id', 'start_field', 'start_time',
-                   'end_field', 'end_time', 'pos_team', 'pos_time',
-                   'first_downs', 'result', 'penalty_yards', 'yards_gained',
-                   'play_count',
-                   'time_inserted', 'time_updated',
-                   ]
+    _table = 'drive'
+
+    _sql_columns = ['gsis_id', 'drive_id', 'start_field', 'start_time',
+                    'end_field', 'end_time', 'pos_team', 'pos_time',
+                    'first_downs', 'result', 'penalty_yards', 'yards_gained',
+                    'play_count',
+                    'time_inserted', 'time_updated',
+                    ]
+
+    _sql_derived = []
+
+    _sql_fields = _sql_columns + _sql_derived
 
     __slots__ = _sql_fields + ['_db', '_game', '_plays']
+
+    @staticmethod
+    def _as_sql(field, prefix=None):
+        prefix = 'drive.' if prefix is None else prefix
+        if field in Drive._sql_columns:
+            return '%s%s' % (prefix, field)
+        raise AttributeError(field)
 
     @staticmethod
     def _from_nflgame(db, g, d):
@@ -1214,6 +1426,7 @@ class Drive (object):
 
         # At this point, some plays don't have valid game times. Fix it!
         # If we absolutely cannot fix it, drop the play. Maintain integrity!
+        drive._plays = []
         for play in candidates:
             if play.time is None:
                 play.time = _play_time(drive, play,
@@ -1235,14 +1448,14 @@ class Drive (object):
         """
         Given a GSIS identifier (e.g., `2012090500`) as a string
         and a integer drive id, this returns a `nfldb.Drive` object
-        corresponding to `id`.
+        corresponding to given identifiers.
 
         If no corresponding drive is found, then `None` is returned.
         """
         with Tx(db) as cursor:
             cursor.execute('''
-                SELECT * FROM drive WHERE (gsis_id, drive_id) = %s
-            ''', (id,))
+                SELECT %s FROM drive WHERE (gsis_id, drive_id) = %s
+            ''' % (_select_fields(Drive), '%s'), ((gsis_id, drive_id),))
             if cursor.rowcount > 0:
                 return Drive.from_row(db, cursor.fetchone())
         return None
@@ -1258,7 +1471,7 @@ class Drive (object):
         game information on demand.
         """
         self._game = None
-        self._plays = []
+        self._plays = None
         self._db = db
 
         self.gsis_id = gsis_id
@@ -1352,18 +1565,19 @@ class Drive (object):
         if self._plays is None:
             self._plays = []
             with Tx(self._db) as cursor:
-                cursor.execute('''
-                    SELECT * FROM play WHERE (gsis_id, drive_id) = %s
-                ''', ((self.gsis_id, self.drive_id),))
+                q = '''
+                    SELECT %s FROM play WHERE (gsis_id, drive_id) = %s
+                ''' % (_select_fields(Play), '%s')
+                cursor.execute(q, ((self.gsis_id, self.drive_id),))
                 for row in cursor.fetchall():
-                    p = Play.from_row(self.db, cursor.fetchone())
+                    p = Play.from_row(self._db, row)
                     p._drive = self
                     self._plays.append(p)
         return self._plays
 
     @property
     def _row(self):
-        return _as_row(Drive._sql_fields, self)
+        return _as_row(Drive._sql_columns, self)
 
     def _save(self, cursor):
         vals = self._row
@@ -1377,19 +1591,56 @@ class Drive (object):
         for play in (self._plays or []):
             play._save(cursor)
 
+    def __str__(self):
+        s = '[%-12s] %-3s from %-6s to %-6s '
+        s += '(lasted %s - %s to %s)'
+        return s % (
+            self.result, self.pos_team, self.start_field, self.end_field,
+            self.pos_time, self.start_time, self.end_time,
+        )
+
 
 class Game (object):
-    _sql_fields = ['gsis_id', 'gamekey', 'start_time', 'week', 'day_of_week',
-                   'season_year', 'season_type', 'finished',
-                   'home_team', 'home_score', 'home_score_q1', 'home_score_q2',
-                   'home_score_q3', 'home_score_q4', 'home_score_q5',
-                   'home_turnovers',
-                   'away_team', 'away_score', 'away_score_q1', 'away_score_q2',
-                   'away_score_q3', 'away_score_q4', 'away_score_q5',
-                   'away_turnovers',
-                   'time_inserted', 'time_updated']
+    _table = 'game'
+
+    _sql_columns = ['gsis_id', 'gamekey', 'start_time', 'week', 'day_of_week',
+                    'season_year', 'season_type', 'finished',
+                    'home_team', 'home_score', 'home_score_q1',
+                    'home_score_q2', 'home_score_q3', 'home_score_q4',
+                    'home_score_q5', 'home_turnovers',
+                    'away_team', 'away_score', 'away_score_q1',
+                    'away_score_q2', 'away_score_q3', 'away_score_q4',
+                    'away_score_q5', 'away_turnovers',
+                    'time_inserted', 'time_updated']
+
+    _sql_derived = ['winner', 'loser']
+
+    _sql_fields = _sql_columns + _sql_derived
 
     __slots__ = _sql_fields + ['_db', '_drives']
+
+    # Document instance variables for derived SQL fields.
+    __pdoc__['Game.winner'] = '''The winner of this game.'''
+    __pdoc__['Game.loser'] = '''The loser of this game.'''
+
+    @staticmethod
+    def _as_sql(field, prefix=None):
+        prefix = 'game.' if prefix is None else prefix
+        if field in Game._sql_columns:
+            return '%s%s' % (prefix, field)
+        elif field == 'winner':
+            return '''
+                (CASE WHEN {prefix}home_score > {prefix}away_score
+                    THEN {prefix}home_team
+                    ELSE {prefix}away_team
+                 END)'''.format(prefix=prefix)
+        elif field == 'loser':
+            return '''
+                (CASE WHEN {prefix}home_score < {prefix}away_score
+                    THEN {prefix}home_team
+                    ELSE {prefix}away_team
+                 END)'''.format(prefix=prefix)
+        raise AttributeError(field)
 
     @staticmethod
     def _from_nflgame(db, g):
@@ -1426,6 +1677,7 @@ class Game (object):
                     g.score_away_q5, int(g.data['away']['to']),
                     None, None)
 
+        game._drives = []
         for drive in g.drives:
             game._drives.append(Drive._from_nflgame(db, game, drive))
         return game
@@ -1461,14 +1713,14 @@ class Game (object):
     def from_id(db, gsis_id):
         """
         Given a GSIS identifier (e.g., `2012090500`) as a string,
-        returns a `nfldb.Game` object corresponding to `id`.
+        returns a `nfldb.Game` object corresponding to `gsis_id`.
 
         If no corresponding game is found, `None` is returned.
         """
         with Tx(db) as cursor:
             cursor.execute('''
-                SELECT * FROM game WHERE gsis_id = %s
-            ''', (id,))
+                SELECT %s FROM game WHERE gsis_id = %s
+            ''' % (_select_fields(Game), '%s'), (gsis_id,))
             if cursor.rowcount > 0:
                 return Game.from_row(db, cursor.fetchone())
         return None
@@ -1479,13 +1731,13 @@ class Game (object):
                  home_score_q3, home_score_q4, home_score_q5, home_turnovers,
                  away_team, away_score, away_score_q1, away_score_q2,
                  away_score_q3, away_score_q4, away_score_q5, away_turnovers,
-                 time_inserted, time_updated):
+                 time_inserted, time_updated, loser=None, winner=None):
         """
         A basic constructor for making a `nfldb.Game` object. It is
         advisable to use one of the `nfldb.Game.from_` methods to
         introduce a new `nfldb.Game` object.
         """
-        self._drives = []
+        self._drives = None
 
         self._db = db
         """
@@ -1596,17 +1848,48 @@ class Game (object):
             self._drives = []
             with Tx(self._db) as cursor:
                 cursor.execute('''
-                    SELECT * FROM drive WHERE gsis_id = %s
-                ''', (self.gsis_id,))
+                    SELECT %s FROM drive WHERE gsis_id = %s
+                ''' % (_select_fields(Drive), '%s'), (self.gsis_id,))
                 for row in cursor.fetchall():
-                    d = Drive.from_row(self.db, cursor.fetchone())
+                    d = Drive.from_row(self._db, row)
                     d._game = self
                     self._drives.append(d)
         return self._drives
 
     @property
+    def plays(self):
+        """
+        Returns a list of `nfldb.Play` objects in this game.
+        """
+        plays = []
+        for drive in self.drives:
+            for play in self.plays:
+                plays.append(play)
+        return plays
+
+    @property
+    def players(self):
+        """
+        Returns a list of tuples. The first element is the team the
+        player was on during the game and the second element is a
+        `nfldb.Player` object corresponding to that player's meta data
+        (including the team he's currently on).
+        The list is returned without duplicates and sorted by team and
+        player name.
+        """
+        pset = set()
+        players = []
+        for drive in self.drives:
+            for play in drive.plays:
+                for pp in play.play_players:
+                    if pp.player_id not in pset:
+                        players.append((pp.team, pp.player))
+                        pset.add(pp.player_id)
+        return sorted(players)
+
+    @property
     def _row(self):
-        return _as_row(Game._sql_fields, self)
+        return _as_row(Game._sql_columns, self)
 
     def _save(self, cursor):
         vals = self._row
