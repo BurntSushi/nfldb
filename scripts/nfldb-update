@@ -11,6 +11,13 @@ import nfldb
 import nflgame
 
 
+_batch_size = 150
+"""
+The number of games to batch before sending data to the database
+server.
+"""
+
+
 def log(*args, **kwargs):
     kwargs['file'] = sys.stderr
     print(*args, **kwargs)
@@ -76,6 +83,11 @@ def update_players(cursor, interval):
     # Reset the player JSON database.
     nflgame.players = nflgame.player._create_players()
 
+    log('Locking player table...')
+    cursor.execute('''
+        LOCK TABLE player IN SHARE ROW EXCLUSIVE MODE
+    ''')
+
     log('Updating %d players... ' % len(nflgame.players), end='')
     if num_existing == 0:  # Fast path the initial insert.
         insert = []
@@ -119,7 +131,7 @@ def bulk_insert_game_data(cursor, scheduled):
     bulk = defaultdict(list)
     queued = 0
     for gsis_id in scheduled:
-        if queued >= 150:
+        if queued >= _batch_size:
             do()
             queued = 0
         g = game_from_id(cursor, gsis_id)
@@ -260,10 +272,14 @@ def update(db, player_interval=(60 * 60 * 12)):
     # Comparatively, updating players is pretty simple. Player meta data
     # changes infrequently, which means we can update it on a larger interval
     # and we can be less careful about performance.
-    with nfldb.Tx(db) as cursor:
-        log('-' * 79)
-        log('STARTING NFLDB UPDATE AT %s' % nfldb.now())
+    log('-' * 79)
+    log('STARTING NFLDB UPDATE AT %s' % nfldb.now())
 
+    with nfldb.Tx(db) as cursor:
+        # Try to update players first to avoid upserting them.
+        update_players(cursor, player_interval)
+
+    with nfldb.Tx(db) as cursor:
         log('Locking write access to tables... ', end='')
         cursor.execute('''
             LOCK TABLE player IN SHARE ROW EXCLUSIVE MODE;
@@ -273,9 +289,6 @@ def update(db, player_interval=(60 * 60 * 12)):
             LOCK TABLE play_player IN SHARE ROW EXCLUSIVE MODE
         ''')
         log('done.')
-
-        # Try to update players first to avoid upserting them.
-        update_players(cursor, player_interval)
 
         nada = games_missing(cursor)
         if len(nada) > 0:
