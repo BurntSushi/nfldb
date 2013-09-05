@@ -51,6 +51,23 @@ def aggregate(objs):
     return summed.values()
 
 
+def current(db):
+    """
+    Returns a triple of `nfldb.Enums.season_phase`, season year and week
+    corresponding to values that `nfldb` thinks are current.
+
+    Note that this only queries the database. Only the `nfldb-update`
+    script fetches the current state from NFL.com.
+
+    The values retrieved may be `None` if the season is over or if they
+    haven't been updated yet by the `nfldb-update` script.
+    """
+    with Tx(db, factory=tuple_cursor) as cursor:
+        cursor.execute('SELECT season_type, season_year, week FROM meta')
+        return cursor.fetchone()
+    return tuple([None] * 3)
+
+
 def _append_conds(conds, tabtype, kwargs):
     """
     Adds `nfldb.Condition` objects to the condition list `conds` for
@@ -282,6 +299,11 @@ class Comparison (Condition):
             return cursor.mogrify(paramed, (self.value,))
 
 
+def QueryOR(db):
+    """An alias for `nfldb.Query(db, orelse=True)`."""
+    return Query(db, orelse=True)
+
+
 class Query (Condition):
     """
     A query represents a set of criteria to search a database.
@@ -290,6 +312,12 @@ class Query (Condition):
     def __init__(self, db, orelse=False):
         self._db = db
         """A psycopg2 database connection object."""
+
+        self._sort_exprs = None
+        """Expressions used to sort the results."""
+
+        self._limit = None
+        """The number of results to limit the search to."""
 
         self._andalso = []
         """A list of conjunctive conditions."""
@@ -313,6 +341,18 @@ class Query (Condition):
         else:
             self._agg_default_cond = self._agg_andalso
 
+    def sort(self, exprs):
+        self._sort_exprs = exprs
+        return self
+
+    def limit(self, count):
+        self._limit = count
+        return self
+
+    @property
+    def _sorter(self):
+        return Sorter(self._sort_exprs, self._limit)
+
     def andalso(self, *conds):
         """
         Adds the list of `nfldb.Query` objects in `conds` to this
@@ -321,17 +361,7 @@ class Query (Condition):
         self._andalso += conds
         return self
 
-    def orelse(self, *conds):
-        """
-        Adds the list of `nfldb.Query` objects in `conds` to this
-        query's list of disjunctive conditions. Note that a disjunction
-        on this query applies to the entire set of condition in this
-        query's list of conjunctive conditions.
-        """
-        self._orelse += conds
-        return self
-
-    def games(self, **kw):
+    def game(self, **kw):
         """
         Specify search criteria for an NFL game. The possible fields
         correspond to columns in the SQL table (or derived columns).
@@ -345,14 +375,14 @@ class Query (Condition):
         _append_conds(self._default_cond, types.Game, kw)
         if 'team' in kw:
             ors = {'home_team': kw['team'], 'away_team': kw['team']}
-            self.andalso(Query(self._db, orelse=True).games(**ors))
+            self.andalso(Query(self._db, orelse=True).game(**ors))
         return self
 
-    def drives(self, **kw):
+    def drive(self, **kw):
         _append_conds(self._default_cond, types.Drive, kw)
         return self
 
-    def plays(self, **kw):
+    def play(self, **kw):
         _append_conds(self._default_cond, types.Play, kw)
         _append_conds(self._default_cond, types.PlayPlayer, kw)
 
@@ -367,19 +397,19 @@ class Query (Condition):
             def replace_or(*fields):
                 q = Query(self._db, orelse=True)
                 ors = dict([('%s__%s' % (f, suff), value) for f in fields])
-                self.andalso(q.plays(**ors))
+                self.andalso(q.play(**ors))
 
             if nosuff in types.PlayPlayer._derived_sums:
                 replace_or(*types.PlayPlayer._derived_sums[nosuff])
         return self
 
-    def players(self, **kw):
+    def player(self, **kw):
         _append_conds(self._default_cond, types.Player, kw)
         return self
 
     def aggregate(self, **kw):
         """
-        This is just like `nfldb.Query.plays`, except the search
+        This is just like `nfldb.Query.play`, except the search
         parameters are applied to aggregate statistics.
 
         Note that this method can **only** be used with
@@ -390,20 +420,19 @@ class Query (Condition):
         _append_conds(self._agg_default_cond, types.PlayPlayer, kw)
         return self
 
-    def as_games(self, sortby=None, limit=None):
+    def as_games(self):
         """
         Executes the query and returns the results as a list of
         `nfldb.Game` objects.
         """
-        sorter = Sorter(sortby, limit)
-        ids = self._ids('game', sorter)
+        ids = self._ids('game', self._sorter)
         results = []
         q = 'SELECT %s FROM game %s %s'
         with Tx(self._db) as cursor:
             q = q % (
                 types._select_fields(types.Game),
                 _prefix_and(_sql_pkey_in(cursor, ['gsis_id'], ids['game'])),
-                sorter.sql(tabtype=types.Game),
+                self._sorter.sql(tabtype=types.Game),
             )
             cursor.execute(q)
 
@@ -411,13 +440,12 @@ class Query (Condition):
                 results.append(types.Game.from_row(self._db, row))
         return results
 
-    def as_drives(self, sortby=None, limit=None):
+    def as_drives(self):
         """
         Executes the query and returns the results as a list of
         `nfldb.Drive` objects.
         """
-        sorter = Sorter(sortby, limit)
-        ids = self._ids('drive', sorter)
+        ids = self._ids('drive', self._sorter)
         tables = self._tables()
         results = []
         q = 'SELECT %s FROM drive %s %s'
@@ -426,7 +454,7 @@ class Query (Condition):
             q = q % (
                 types._select_fields(types.Drive),
                 _prefix_and(pkey),
-                sorter.sql(tabtype=types.Drive),
+                self._sorter.sql(tabtype=types.Drive),
             )
             cursor.execute(q)
 
@@ -435,7 +463,7 @@ class Query (Condition):
                     results.append(types.Drive.from_row(self._db, row))
         return results
 
-    def _as_plays(self, sortby=None, limit=None):
+    def _as_plays(self):
         """
         Executes the query and returns the results as a dictionary
         of `nlfdb.Play` objects that don't have the `play_player`
@@ -446,8 +474,7 @@ class Query (Condition):
         """
 
         plays = OrderedDict()
-        sorter = Sorter(sortby, limit)
-        ids = self._ids('play', sorter)
+        ids = self._ids('play', self._sorter)
         pset = _play_set(ids)
         pkey = None
         q = 'SELECT %s FROM play %s %s'
@@ -461,7 +488,7 @@ class Query (Condition):
             q = q % (
                 types._select_fields(types.Play),
                 _prefix_and(pkey),
-                sorter.sql(tabtype=types.Play),
+                self._sorter.sql(tabtype=types.Play),
             )
             cursor.execute(q)
             init = types.Play._from_tuple
@@ -472,7 +499,7 @@ class Query (Condition):
                     plays[pid] = p
         return plays, pkey
 
-    def as_plays(self, fill=True, sortby=None, limit=None):
+    def as_plays(self, fill=True):
         """
         Executes the query and returns the results as a list of
         `nlfdb.Play` objects with the `nfldb.Play.play_players`
@@ -488,17 +515,16 @@ class Query (Condition):
         sorting criteria specified to player statistics will be
         ignored.
         """
-        plays, pkey = self._as_plays(sortby=sortby, limit=limit)
+        plays, pkey = self._as_plays()
         if not fill:
             return plays.values()
 
-        sorter = Sorter(sortby, limit)
         q = 'SELECT %s FROM play_player %s %s'
         with Tx(self._db, factory=tuple_cursor) as cursor:
             q = q % (
                 types._select_fields(types.PlayPlayer),
                 _prefix_and(pkey),
-                sorter.sql(tabtype=types.PlayPlayer),
+                self._sorter.sql(tabtype=types.PlayPlayer),
             )
             cursor.execute(q)
             init = types.PlayPlayer._from_tuple
@@ -509,9 +535,9 @@ class Query (Condition):
                     if play._play_players is None:
                         play._play_players = []
                     play._play_players.append(init(self._db, t))
-        return sorter.sorted(plays.values())
+        return self._sorter.sorted(plays.values())
 
-    def as_play_players(self, sortby=None, limit=None):
+    def as_play_players(self):
         """
         Executes the query and returns the results as a list of
         `nlfdb.PlayPlayer` objects.
@@ -520,8 +546,7 @@ class Query (Condition):
         by bypassing play data. Usually the results of this method
         are passed to `nfldb.aggregate`.
         """
-        sorter = Sorter(sortby, limit)
-        ids = self._ids('play_player', sorter)
+        ids = self._ids('play_player', self._sorter)
         pset = _play_set(ids)
         player_pks = None
         tables = self._tables()
@@ -541,7 +566,7 @@ class Query (Condition):
             q = q % (
                 types._select_fields(types.PlayPlayer),
                 _prefix_and(player_pks, pkey),
-                sorter.sql(tabtype=types.PlayPlayer),
+                self._sorter.sql(tabtype=types.PlayPlayer),
             )
             cursor.execute(q)
             init = types.PlayPlayer._from_tuple
@@ -551,20 +576,19 @@ class Query (Condition):
                     results.append(init(self._db, t))
         return results
 
-    def as_players(self, sortby=None, limit=None):
+    def as_players(self):
         """
         Executes the query and returns the results as a list of
         `nfldb.Player` objects.
         """
-        sorter = Sorter(sortby, limit)
-        ids = self._ids('player', sorter)
+        ids = self._ids('player', self._sorter)
         results = []
         q = 'SELECT %s FROM player %s %s'
         with Tx(self._db) as cur:
             q = q % (
                 types._select_fields(types.Player),
                 _prefix_and(_sql_pkey_in(cur, ['player_id'], ids['player'])),
-                sorter.sql(tabtype=types.Player),
+                self._sorter.sql(tabtype=types.Player),
             )
             cur.execute(q)
 
@@ -572,7 +596,7 @@ class Query (Condition):
                 results.append(types.Player.from_row(self._db, row))
         return results
 
-    def as_aggregate(self, sortby=None, limit=None):
+    def as_aggregate(self):
         """
         Executes the query and returns the results as aggregated
         `nfldb.PlayPlayer` objects. This method is meant to be a more
@@ -611,7 +635,6 @@ class Query (Condition):
         tables, agg_tables = self._tables(), self._agg_tables()
         assert 'drive' not in tables, 'cannot use drive criteria in aggregate'
 
-        sorter = Sorter(sortby, limit)
         gids, player_ids = None, None
         play_join = ''
         results = []
@@ -652,7 +675,7 @@ class Query (Condition):
                 play_join=play_join,
                 where=_prefix_and(gids, player_ids, where, prefix='WHERE '),
                 having=_prefix_and(having, prefix='HAVING '),
-                order=sorter.sql(tabtype=types.PlayPlayer, prefix=''),
+                order=self._sorter.sql(tabtype=types.PlayPlayer, prefix=''),
             )
             cur.execute(q)
 
@@ -918,7 +941,7 @@ class Sorter (object):
             xs = xs[:self.limit]
         return xs
 
-    def sql(self, tabtype=None, only_limit=False, prefix=None):
+    def sql(self, tabtype, only_limit=False, prefix=None):
         """
         Return a SQL `ORDER BY ... LIMIT` expression corresponding to
         the criteria in `self`. If there are no ordering expressions
@@ -970,7 +993,10 @@ class Sorter (object):
     def _cmp(self, a, b):
         compare, geta = cmp, getattr
         for field, order in self.exprs:
-            c = compare(geta(a, field), geta(b, field))
+            x, y = geta(a, field, None), geta(b, field, None)
+            if x is None or y is None:
+                continue
+            c = compare(x, y)
             if order == 'DESC':
                 c *= -1
             if c != 0:

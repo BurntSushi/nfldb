@@ -9,6 +9,7 @@ import sys
 import nfldb
 
 import nflgame
+import nflgame.live
 
 
 _batch_size = 150
@@ -53,6 +54,16 @@ def game_from_schedule(cursor, gsis_id):
     """
     s = nflgame.schedule.games_byid[gsis_id]
     return nfldb.Game._from_schedule(cursor.connection, s)
+
+
+def update_season_state(cursor):
+    phase_map = nfldb.types.Enums._nflgame_season_phase
+
+    nflgame.live._update_week_number()
+    typ = phase_map[nflgame.live._cur_season_phase]
+    cursor.execute('''
+        UPDATE meta SET season_type = %s, season_year = %s, week = %s
+    ''', (typ, nflgame.live._cur_year, nflgame.live._cur_week))
 
 
 def update_players(cursor, interval):
@@ -288,6 +299,10 @@ def update(db, player_interval=(60 * 60 * 12)):
             LOCK TABLE play IN SHARE ROW EXCLUSIVE MODE;
             LOCK TABLE play_player IN SHARE ROW EXCLUSIVE MODE
         ''')
+        log('done.')
+
+        log('Updating season phase, year and week... ', end='')
+        update_season_state(cursor)
         log('done.')
 
         nada = games_missing(cursor)

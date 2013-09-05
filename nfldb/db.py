@@ -466,6 +466,16 @@ def _migrate_2(c):
         )
     ''')
 
+    # Now that some types have been made, add current state to meta table.
+    c.execute('''
+        ALTER TABLE meta
+            ADD season_type season_phase NULL,
+            ADD season_year usmallint NULL
+                    CHECK (season_year >= 1960 AND season_year <= 2100),
+            ADD week usmallint NULL
+                    CHECK (week >= 1 AND week <= 25)
+    ''')
+
     # Create the team table and populate it.
     c.execute('''
         CREATE TABLE team (
