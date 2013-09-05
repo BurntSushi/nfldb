@@ -5,3 +5,13 @@ keeping statistics up to date in almost realtime.
 
 Installation, documentation and usage instructions are forthcoming.
 
+
+## Entity-relationship diagram
+
+Here's a shortened version that excludes play and player statistics:
+
+[![Shortened ER diagram for nfldb](http://burntsushi.net/stuff/nfldb/nfldb-short.png)](http://burntsushi.net/stuff/nfldb/nfldb-short.pdf)
+
+There is also a [full PDF version](http://burntsushi.net/stuff/nfldb/nfldb.pdf)
+that includes every column in the database.
+

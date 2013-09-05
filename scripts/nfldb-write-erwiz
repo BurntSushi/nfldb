@@ -5,20 +5,22 @@
 # have to be entered manually.
 
 from __future__ import absolute_import, division, print_function
+import sys
 
 import nfldb
 
 template_erwiz = '''
-{{title: "nfldb Entity-Relationship diagram"; title-size: 20}}
+{{title: "nfldb Entity-Relationship diagram{shortened}"; title-size: 20}}
 
 # Entities
 {entities}
 
 # Relationships
+{relationships}
 '''
 
 template_entity = '''
-[{name}]
+[{name}] {{color:{color}}}
 {columns}
 '''
 
@@ -26,6 +28,23 @@ template_column = '  {pk}{column}{fk}{type}'
 
 tables = ['player', 'team', 'game', 'drive', 'play', 'play_player', 'meta']
 
+short_whitelist = {
+    'player': ['player_id', 'full_name', 'team', 'position', 'status'],
+    'team': ['team_id', 'city', 'name'],
+    'game': ['gsis_id', 'start_time', 'week', 'season_year', 'season_type',
+             'finished', 'home_team', 'home_score', 'away_team', 'away_score'],
+    'drive': ['gsis_id', 'drive_id', 'start_field', 'start_time', 'end_field',
+              'end_time', 'pos_team', 'pos_time'],
+    'play': ['gsis_id', 'drive_id', 'play_id', 'time', 'pos_team', 'yardline',
+             'down', 'yards_to_go'],
+    'play_player': ['gsis_id', 'drive_id', 'play_id', 'player_id', 'team'],
+    'meta': ['version', 'season_type', 'season_year', 'week'],
+}
+
+colors = {
+    'player': 'green', 'team': 'green', 'meta': 'red',
+    'game': 'blue', 'drive': 'blue', 'play': 'blue', 'play_player': 'blue',
+}
 
 def mk_type(row):
     if row['domain_name']:
@@ -39,9 +58,9 @@ def mk_type(row):
         type = 'varchar'
 
     if row['is_nullable'] == 'YES':
-        type += ', not null'
+        type += ', null'
     else:
-        type += ', nullable'
+        type += ', not null'
     return ' [%s]' % type
 
 
@@ -50,12 +69,17 @@ def is_pk(table, col):
         return False
     return col.endswith('_id')
 
+
 def is_fk(table, col):
     if table == 'game' and col == 'gsis_id':
         return False
     if col == 'profile_id':
         return False
     return col.endswith('_id') and not col.startswith(table)
+
+
+def in_whitelist(row):
+    return row['column_name'] in short_whitelist[row['table_name']]
 
 
 def mk_column(row):
@@ -66,6 +90,7 @@ def mk_column(row):
     return template_column.format(pk=pk, fk=fk, column=col, type=mk_type(row))
 
 
+short = len(sys.argv) == 2 and sys.argv[1] == '--short'
 db = nfldb.connect()
 entities = []
 with nfldb.Tx(db) as cursor:
@@ -79,9 +104,32 @@ with nfldb.Tx(db) as cursor:
         ''', (table,))
         columns = []
         for row in cursor.fetchall():
-            columns.append(mk_column(row))
+            if not short or (short and in_whitelist(row)):
+                columns.append(mk_column(row))
 
-        entity = template_entity.format(name=table, columns='\n'.join(columns))
+        entity = template_entity.format(name=table, columns='\n'.join(columns),
+                                        color=colors[table])
         entities.append(entity)
 
-print(template_erwiz.format(entities='\n'.join(entities)))
+# No magic for relationships. Just gotta write'em out manually.
+relationships = '''
+[player] *--1 [team] <belongs-to->
+[game] *--1 [team] <has-one->
+[game] *--1 [team] <has-one->
+[drive] *--1 [team] <has-one->
+[play] *--1 [team] <has-one->
+[play_player] *--1 [team] <has-one->
+
+[game] 1--* [drive] <has-many->
+[game] 1--* [play] <has-many->
+[game] 1--* [play_player] <has-many->
+
+[drive] 1--* [play] <has-many->
+[drive] 1--* [play_player] <has-many->
+
+[play] 1--* [play_player] <has-many->
+'''
+
+print(template_erwiz.format(entities='\n'.join(entities),
+                            relationships=relationships,
+                            shortened=' (shortened)' if short else ''))

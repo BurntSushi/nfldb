@@ -3,7 +3,14 @@ all:
 
 er:
 	nfldb-write-erwiz > /tmp/nfldb.erwiz
-	erwiz /tmp/nfldb.erwiz nfldb.pdf
+	erwiz /tmp/nfldb.erwiz doc/nfldb.pdf
+	erwiz /tmp/nfldb.erwiz doc/nfldb.png
+
+	nfldb-write-erwiz --short > /tmp/nfldb-short.erwiz
+	erwiz /tmp/nfldb-short.erwiz doc/nfldb-short.pdf
+	erwiz /tmp/nfldb-short.erwiz doc/nfldb-short.png
+
+	rsync doc/nfldb*{pdf,png} Geils:~/www/burntsushi.net/public_html/stuff/nfldb
 
 docs: er
 	pdoc --html --html-dir ./doc --overwrite ./nfldb
@@ -16,7 +23,7 @@ longdesc.rst: nfldb/__init__.py docstring
 	rm -f docstring
 
 docstring: nfldb/__init__.py
-	./extract-docstring > docstring
+	./scripts/extract-docstring > docstring
 
 dev-install: docs
 	[[ -n "$$VIRTUAL_ENV" ]] || exit
