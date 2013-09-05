@@ -45,6 +45,8 @@ def standard_team(team):
     nfldb.team.teams (case insensitive). All known variants of a team
     name are searched. If no team is found, "UNK" is returned.
     """
+    if not team:
+        return 'UNK'
     team = team.lower()
     for variants in teams:
         for variant in variants:
