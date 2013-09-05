@@ -2,7 +2,7 @@ all:
 	@echo "Specify a target."
 
 er:
-	seed-erwiz > /tmp/nfldb.erwiz
+	nfldb-write-erwiz > /tmp/nfldb.erwiz
 	erwiz /tmp/nfldb.erwiz nfldb.pdf
 
 docs: er
