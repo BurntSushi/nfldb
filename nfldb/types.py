@@ -167,6 +167,11 @@ class _Enum (enum.Enum):
         """
         return lambda sqlv, _: enum[sqlv]
 
+    def __lt__(self, other):
+        if self.__class__ is other.__class__:
+            return self._value_ < other._value_
+        return NotImplemented
+
     def __conform__(self, proto):
         if proto is ISQLQuote:
             return AsIs("'%s'" % self.name)
