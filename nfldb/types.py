@@ -165,7 +165,7 @@ class _Enum (enum.Enum):
         corresponding to `enum`. Namely, `enum` should be a member of
         `nfldb.Enums`.
         """
-        return lambda sqlv, _: enum[sqlv]
+        return lambda sqlv, _: None if not sqlv else enum[sqlv]
 
     def __lt__(self, other):
         if self.__class__ is other.__class__:
