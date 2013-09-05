@@ -1,0 +1,87 @@
+#!/usr/bin/env python2
+
+# This script seeds an erwiz file, which is used to generate ER figures.
+# This only includes column names (and types?). Entity relationships still
+# have to be entered manually.
+
+from __future__ import absolute_import, division, print_function
+
+import nfldb
+
+template_erwiz = '''
+{{title: "nfldb Entity-Relationship diagram"; title-size: 20}}
+
+# Entities
+{entities}
+
+# Relationships
+'''
+
+template_entity = '''
+[{name}]
+{columns}
+'''
+
+template_column = '  {pk}{column}{fk}{type}'
+
+tables = ['player', 'team', 'game', 'drive', 'play', 'play_player', 'meta']
+
+
+def mk_type(row):
+    if row['domain_name']:
+        type = row['domain_name']
+    elif row['data_type'] == 'USER-DEFINED' and row['udt_name']:
+        type = row['udt_name']
+    else:
+        type = row['data_type']
+
+    if type == 'character varying':
+        type = 'varchar'
+
+    if row['is_nullable'] == 'YES':
+        type += ', not null'
+    else:
+        type += ', nullable'
+    return ' [%s]' % type
+
+
+def is_pk(table, col):
+    if col == 'profile_id':
+        return False
+    return col.endswith('_id')
+
+def is_fk(table, col):
+    if table == 'game' and col == 'gsis_id':
+        return False
+    if col == 'profile_id':
+        return False
+    return col.endswith('_id') and not col.startswith(table)
+
+
+def mk_column(row):
+    col = row['column_name']
+    table = row['table_name']
+    pk = '*' if is_pk(table, col) else ''
+    fk = '*' if is_fk(table, col) else ''
+    return template_column.format(pk=pk, fk=fk, column=col, type=mk_type(row))
+
+
+db = nfldb.connect()
+entities = []
+with nfldb.Tx(db) as cursor:
+    for table in tables:
+        cursor.execute('''
+            SELECT 
+                table_name, column_name, udt_name, data_type, domain_name,
+                is_nullable
+            FROM information_schema.columns
+            WHERE table_name = %s
+        ''', (table,))
+        columns = []
+        for row in cursor.fetchall():
+            columns.append(mk_column(row))
+
+        entity = template_entity.format(name=table, columns='\n'.join(columns))
+        entities.append(entity)
+
+print(template_erwiz.format(entities='\n'.join(entities)))

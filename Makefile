@@ -1,7 +1,11 @@
 all:
 	@echo "Specify a target."
 
-docs:
+er:
+	seed-erwiz > /tmp/nfldb.erwiz
+	erwiz /tmp/nfldb.erwiz nfldb.pdf
+
+docs: er
 	pdoc --html --html-dir ./doc --overwrite ./nfldb
 
 pypi: docs
