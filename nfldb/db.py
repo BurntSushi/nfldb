@@ -638,7 +638,11 @@ def _migrate_2(c):
                 ON DELETE CASCADE,
             FOREIGN KEY (player_id)
                 REFERENCES player (player_id)
+                ON DELETE RESTRICT,
+            FOREIGN KEY (team)
+                REFERENCES team (team_id)
                 ON DELETE RESTRICT
+                ON UPDATE CASCADE
         )
     ''' % ', '.join(cat._sql_field for cat in _player_categories.values()))
 
