@@ -589,6 +589,16 @@ class Clock (object):
     """
 
     @staticmethod
+    def from_str(phase, clock):
+        assert getattr(Enums.game_phase, phase, None) is not None, \
+            '"%s" is not a valid game phase. choose one of %s' \
+            % (phase, map(str, Enums.game_phase))
+
+        minutes, seconds = map(int, clock.split(':', 1))
+        elapsed = Clock._phase_max - ((minutes * 60) + seconds)
+        return Clock(Enums.game_phase[phase], int(elapsed))
+
+    @staticmethod
     def _pg_cast(sqlv, cursor):
         """
         Casts a SQL string of the form `(game_phase, elapsed)` to a
