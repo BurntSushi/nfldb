@@ -593,7 +593,7 @@ def _migrate_2(c):
             drive_id usmallint NOT NULL,
             play_id usmallint NOT NULL,
             time game_time NOT NULL,
-            pos_team character varying (3) NULL,
+            pos_team character varying (3) NOT NULL,
             yardline field_pos NULL,
             down smallint NULL
                 CHECK (down >= 1 AND down <= 4),
@@ -624,7 +624,7 @@ def _migrate_2(c):
             drive_id usmallint NOT NULL,
             play_id usmallint NOT NULL,
             player_id character varying (10) NOT NULL,
-            team character varying (3) NULL,
+            team character varying (3) NOT NULL,
             %s,
             PRIMARY KEY (gsis_id, drive_id, play_id, player_id),
             FOREIGN KEY (gsis_id, drive_id, play_id)

@@ -770,9 +770,7 @@ class Player (object):
         if kwargs.get('status', None) is None:
             kwargs['status'] = Enums.player_status.Unknown
 
-        # Explicitly say that the team of a player is unknown.
-        if kwargs.get('team', None) is None:
-            kwargs['team'] = 'UNK'
+        kwargs['team'] = nfldb.team.standard_team(kwargs.get('team', ''))
         return Player(db, p.playerid, p.name, **kwargs)
 
     @staticmethod
@@ -1183,7 +1181,7 @@ class Play (object):
         time = None if not p.time else _nflgame_clock(p.time)
         yardline = FieldPosition(getattr(p.yardline, 'offset', None))
         down = p.down if 1 <= p.down <= 4 else None
-        team = p.team if p.team is not None and len(p.team) > 0 else None
+        team = p.team if p.team is not None and len(p.team) > 0 else 'UNK'
         play = Play(db, d.gsis_id, d.drive_id, int(p.playid), time, team,
                     yardline, down, p.yards_togo, p.desc, p.note,
                     None, None, stats)
@@ -1428,8 +1426,9 @@ class Drive (object):
         start_field = FieldPosition(getattr(d.field_start, 'offset', None))
         end_field = FieldPosition(d.field_end.offset)
         end_time = _nflgame_clock(d.time_end)
+        team = nfldb.team.standard_team(d.team)
         drive = Drive(db, g.gsis_id, d.drive_num, start_field, start_time,
-                      end_field, end_time, d.team,
+                      end_field, end_time, team,
                       PossessionTime(d.pos_time.total_seconds()),
                       d.first_downs, d.result, d.penalty_yds,
                       d.total_yds, d.play_cnt, None, None)
