@@ -46,6 +46,7 @@ colors = {
     'game': 'blue', 'drive': 'blue', 'play': 'blue', 'play_player': 'blue',
 }
 
+
 def mk_type(row):
     if row['domain_name']:
         type = row['domain_name']
@@ -96,7 +97,7 @@ entities = []
 with nfldb.Tx(db) as cursor:
     for table in tables:
         cursor.execute('''
-            SELECT 
+            SELECT
                 table_name, column_name, udt_name, data_type, domain_name,
                 is_nullable
             FROM information_schema.columns
@@ -128,6 +129,8 @@ relationships = '''
 [drive] 1--* [play_player] <has-many->
 
 [play] 1--* [play_player] <has-many->
+
+[player] 1--* [play_player] <has-many->
 '''
 
 print(template_erwiz.format(entities='\n'.join(entities),

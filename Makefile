@@ -33,7 +33,7 @@ dev-install: docs
 
 pep8:
 	pep8-python2 nfldb/{__init__,db,query,types,version}.py
-	pep8-python2 scripts/nfldb-update
+	pep8-python2 scripts/{nfldb-update,nfldb-write-erwiz}
 
 push:
 	git push origin master
