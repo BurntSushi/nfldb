@@ -39,12 +39,12 @@ def config(fp=''):
 
     A total of three possible file paths are tried before
     giving up and returning `None`. The file paths, in
-    order, are: `fp`, `/etc/xdg/nfldb/config.ini` and
+    order, are: `fp`, `sys.prefix/share/nfldb/config.ini` and
     `$XDG_CONFIG_HOME/nfldb/config.ini`.
     """
     paths = [
         fp,
-        path.join('/', 'etc', 'xdg', 'nfldb', 'config.ini'),
+        path.join(sys.prefix, 'share', 'nfldb', 'config.ini'),
         path.join(os.getenv('XDG_CONFIG_HOME'), 'nfldb', 'config.ini'),
     ]
     cp = ConfigParser.RawConfigParser()
@@ -92,8 +92,8 @@ def connect(database=None, user=None, password=None, host=None, port=None,
     if database is None:
         conf = config()
         if conf is None:
-            print("Could not find valid configuration file.", file=sys.stderr)
-            sys.exit(1)
+            raise IOError("Could not find valid configuration file.")
+
         timezone, database = conf['timezone'], conf['database']
         user, password = conf['user'], conf['password']
         host, port = conf['host'], conf['port']

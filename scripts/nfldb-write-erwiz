@@ -5,7 +5,7 @@
 # are written by querying nfldb's information schema. Relationships between
 # entities are written out manually.
 #
-# Note that this script supports a `--short` option that writes a smaller
+# Note that this script supports a `--condense` option that writes a smaller
 # erwiz file. Namely, it excludes many of the play and player statistical
 # columns. This provides a more compact ER diagram that is a useful
 # introduction to the nfldb schema.
@@ -16,7 +16,7 @@ import sys
 import nfldb
 
 template_erwiz = '''
-{{title: "nfldb Entity-Relationship diagram{shortened}"; title-size: 20}}
+{{title: "nfldb Entity-Relationship diagram{condensed}"; title-size: 20}}
 
 # Entities
 {entities}
@@ -34,7 +34,7 @@ template_column = '  {pk}{column}{fk}{type}'
 
 tables = ['player', 'team', 'game', 'drive', 'play', 'play_player', 'meta']
 
-short_whitelist = {
+condense_whitelist = {
     'player': ['player_id', 'full_name', 'team', 'position', 'status'],
     'team': ['team_id', 'city', 'name'],
     'game': ['gsis_id', 'start_time', 'week', 'season_year', 'season_type',
@@ -86,7 +86,7 @@ def is_fk(table, col):
 
 
 def in_whitelist(row):
-    return row['column_name'] in short_whitelist[row['table_name']]
+    return row['column_name'] in condense_whitelist[row['table_name']]
 
 
 def mk_column(row):
@@ -97,7 +97,7 @@ def mk_column(row):
     return template_column.format(pk=pk, fk=fk, column=col, type=mk_type(row))
 
 
-short = len(sys.argv) == 2 and sys.argv[1] == '--short'
+condense = len(sys.argv) == 2 and sys.argv[1] == '--condense'
 db = nfldb.connect()
 entities = []
 with nfldb.Tx(db) as cursor:
@@ -111,7 +111,7 @@ with nfldb.Tx(db) as cursor:
         ''', (table,))
         columns = []
         for row in cursor.fetchall():
-            if not short or (short and in_whitelist(row)):
+            if not condense or in_whitelist(row):
                 columns.append(mk_column(row))
 
         entity = template_entity.format(name=table, columns='\n'.join(columns),
@@ -141,4 +141,4 @@ relationships = '''
 
 print(template_erwiz.format(entities='\n'.join(entities),
                             relationships=relationships,
-                            shortened=' (shortened)' if short else ''))
+                            condensed=' (condensed)' if condense else ''))

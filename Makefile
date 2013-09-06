@@ -1,22 +1,30 @@
+REMOTE=Geils:~/www/burntsushi.net/public_html/stuff/nfldb/
+
 all:
 	@echo "Specify a target."
+
+pypi: docs er sql longdesc.rst
+	sudo python2 setup.py register sdist upload
+
+docs: er
+	pdoc --html --html-dir ./doc --overwrite ./nfldb
 
 er:
 	nfldb-write-erwiz > /tmp/nfldb.erwiz
 	erwiz /tmp/nfldb.erwiz doc/nfldb.pdf
 	erwiz /tmp/nfldb.erwiz doc/nfldb.png
 
-	nfldb-write-erwiz --short > /tmp/nfldb-short.erwiz
-	erwiz /tmp/nfldb-short.erwiz doc/nfldb-short.pdf
-	erwiz /tmp/nfldb-short.erwiz doc/nfldb-short.png
+	nfldb-write-erwiz --condense > /tmp/nfldb-condensed.erwiz
+	erwiz /tmp/nfldb-condensed.erwiz doc/nfldb-condensed.pdf
+	erwiz /tmp/nfldb-condensed.erwiz doc/nfldb-condensed.png
 
-	rsync doc/nfldb*{pdf,png} Geils:~/www/burntsushi.net/public_html/stuff/nfldb
+	rsync doc/nfldb*{pdf,png} $(REMOTE)
 
-docs: er
-	pdoc --html --html-dir ./doc --overwrite ./nfldb
-
-pypi: docs
-	sudo python2 setup.py register sdist upload
+sql:
+	./scripts/nfldb-dump /tmp/nfldb.sql
+	zip /tmp/nfldb.sql.zip /tmp/nfldb.sql
+	rsync --progress /tmp/nfldb.sql.zip $(REMOTE)
+	rm -f /tmp/nfldb.{sql,sql.zip}
 
 longdesc.rst: nfldb/__init__.py docstring
 	pandoc -f markdown -t rst -o longdesc.rst docstring
@@ -25,7 +33,7 @@ longdesc.rst: nfldb/__init__.py docstring
 docstring: nfldb/__init__.py
 	./scripts/extract-docstring > docstring
 
-dev-install: docs
+dev-install:
 	[[ -n "$$VIRTUAL_ENV" ]] || exit
 	rm -rf ./dist
 	python setup.py sdist

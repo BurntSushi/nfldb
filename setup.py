@@ -22,6 +22,8 @@ with codecs.open(path.join(cwd, 'nfldb/version.py'), 'r', 'utf-8') as f:
     version = __version__
 assert version != '0.0.0'
 
+docfiles = glob('doc/nfldb/*.html') + glob('doc/*.pdf') + glob('doc/*.png')
+
 setup(
     name='nfldb',
     author='Andrew Gallant',
@@ -48,7 +50,8 @@ setup(
     packages=['nfldb'],
     data_files=[('share/doc/nfldb', ['README.md', 'longdesc.rst',
                                      'COPYING', 'INSTALL']),
-                ('share/doc/nfldb/doc', glob('doc/nfldb/*.html'))],
+                ('share/doc/nfldb/doc', docfiles),
+                ('share/nfldb', ['config.ini'])],
     install_requires=install_requires,
-    scripts=[]
+    scripts=['scripts/nfldb-update']
 )
