@@ -1,9 +1,8 @@
-A library to manage a relational database containing NFL data, including 
-play-by-play statistics. The library also includes several scripts for 
-maintaining and updating your database, including monitoring live games and 
-keeping statistics up to date in almost realtime.
+nfldb is a relational database bundled with a Python module to quickly and 
+conveniently query and
+[update that database](https://github.com/BurntSushi/nfldb/wiki/Updating-nfldb-with-real-time-data).
 
-Installation, documentation and usage instructions are forthcoming.
+Stay tuned. More is coming in this space.
 
 
 ## Entity-relationship diagram
