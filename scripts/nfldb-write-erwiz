@@ -1,8 +1,14 @@
 #!/usr/bin/env python2
 
-# This script seeds an erwiz file, which is used to generate ER figures.
-# This only includes column names (and types?). Entity relationships still
-# have to be entered manually.
+# This script generates an erwiz file, which in turn generates a graphical
+# ER diagram using the `erwiz` program. The columns and types of each table
+# are written by querying nfldb's information schema. Relationships between
+# entities are written out manually.
+#
+# Note that this script supports a `--short` option that writes a smaller
+# erwiz file. Namely, it excludes many of the play and player statistical
+# columns. This provides a more compact ER diagram that is a useful
+# introduction to the nfldb schema.
 
 from __future__ import absolute_import, division, print_function
 import sys
