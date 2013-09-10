@@ -296,6 +296,9 @@ class Comparison (Condition):
         if isinstance(self.value, strtype) and self.value.startswith('sql('):
             return paramed % self.value[4:-1]
         else:
+            if isinstance(self.value, tuple) or isinstance(self.value, list):
+                paramed = paramed % 'ANY (%s)'
+                self.value = list(self.value)  # Coerce tuples to pg ARRAYs...
             return cursor.mogrify(paramed, (self.value,))
 
 
