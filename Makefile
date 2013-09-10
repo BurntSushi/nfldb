@@ -22,7 +22,7 @@ er:
 
 sql:
 	./scripts/nfldb-dump /tmp/nfldb.sql
-	zip /tmp/nfldb.sql.zip /tmp/nfldb.sql
+	(cd /tmp && zip nfldb.sql.zip nfldb.sql)
 	rsync --progress /tmp/nfldb.sql.zip $(REMOTE)
 	rm -f /tmp/nfldb.{sql,sql.zip}
 
