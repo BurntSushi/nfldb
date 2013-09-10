@@ -1,4 +1,5 @@
 from __future__ import absolute_import, division, print_function
+from collections import defaultdict
 try:
     from collections import OrderedDict
 except ImportError:
@@ -647,44 +648,54 @@ class Query (Condition):
         assert 'drive' not in tables, 'cannot use drive criteria in aggregate'
 
         gids, player_ids = None, None
-        play_join = ''
+        joins = defaultdict(str)
         results = []
-
-        # We can still use the `IN` expression with games and players.
-        # Note that we don't sort identifiers at all, since sorting criteria
-        # is only applied to aggregate values.
-        ids = self._ids('', Sorter(None, None), ['game', 'player'])
 
         with Tx(self._db) as cur:
             if 'game' in tables:
-                gids = _sql_pkey_in(cur, ['gsis_id'], ids['game'],
-                                    prefix='play_player.')
-            if 'player' in tables:
-                player_ids = _sql_pkey_in(cur, ['player_id'], ids['player'],
-                                          prefix='play_player.')
+                joins['game'] = '''
+                    LEFT JOIN game
+                    ON play_player.gsis_id = game.gsis_id
+                '''
+            if 'drive' in tables or 'drive' in agg_tables:
+                joins['drive'] = '''
+                    LEFT JOIN drive
+                    ON play_player.gsis_id = drive.gsis_id
+                        AND play_player.drive_id = drive.drive_id
+                '''
             if 'play' in tables or 'play' in agg_tables:
-                play_join = '''
+                joins['play'] = '''
                     LEFT JOIN play
                     ON play_player.gsis_id = play.gsis_id
                         AND play_player.drive_id = play.drive_id
                         AND play_player.play_id = play.play_id
                 '''
+            if 'player' in tables:
+                joins['player'] = '''
+                    LEFT JOIN player
+                    ON play_player.player_id = player.player_id
+                '''
 
-            where = self._sql_where(cur, ['play', 'play_player'])
+            where = self._sql_where(cur, ['game', 'drive', 'play',
+                                          'play_player', 'player'])
             having = self._sql_where(cur, ['play', 'play_player'],
                                      prefix='', aggregate=True)
             q = '''
                 SELECT play_player.player_id, {sum_fields}
                 FROM play_player
-                {play_join}
+                {join_game}
+                {join_drive}
+                {join_play}
+                {join_player}
                 {where}
                 GROUP BY play_player.player_id
                 {having}
                 {order}
             '''.format(
                 sum_fields=types._sum_fields(types.PlayPlayer),
-                play_join=play_join,
-                where=_prefix_and(gids, player_ids, where, prefix='WHERE '),
+                join_game=joins['game'], join_drive=joins['drive'],
+                join_play=joins['play'], join_player=joins['player'],
+                where=_prefix_and(player_ids, where, prefix='WHERE '),
                 having=_prefix_and(having, prefix='HAVING '),
                 order=self._sorter.sql(tabtype=types.PlayPlayer, prefix=''),
             )
