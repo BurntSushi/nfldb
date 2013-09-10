@@ -319,6 +319,9 @@ class Query (Condition):
         self._limit = None
         """The number of results to limit the search to."""
 
+        self._sort_tables = []
+        """The tables to restrain limiting criteria to."""
+
         self._andalso = []
         """A list of conjunctive conditions."""
 
@@ -351,7 +354,8 @@ class Query (Condition):
 
     @property
     def _sorter(self):
-        return Sorter(self._sort_exprs, self._limit)
+        return Sorter(self._sort_exprs, self._limit,
+                      restraining=self._sort_tables)
 
     def andalso(self, *conds):
         """
@@ -425,6 +429,7 @@ class Query (Condition):
         Executes the query and returns the results as a list of
         `nfldb.Game` objects.
         """
+        self._sort_tables = [types.Game]
         ids = self._ids('game', self._sorter)
         results = []
         q = 'SELECT %s FROM game %s %s'
@@ -445,6 +450,7 @@ class Query (Condition):
         Executes the query and returns the results as a list of
         `nfldb.Drive` objects.
         """
+        self._sort_tables = [types.Drive]
         ids = self._ids('drive', self._sorter)
         tables = self._tables()
         results = []
@@ -472,7 +478,6 @@ class Query (Condition):
 
         The primary key membership SQL expression is also returned.
         """
-
         plays = OrderedDict()
         ids = self._ids('play', self._sorter)
         pset = _play_set(ids)
@@ -515,6 +520,7 @@ class Query (Condition):
         sorting criteria specified to player statistics will be
         ignored.
         """
+        self._sort_tables = [types.Play, types.PlayPlayer]
         plays, pkey = self._as_plays()
         if not fill:
             return plays.values()
@@ -546,6 +552,7 @@ class Query (Condition):
         by bypassing play data. Usually the results of this method
         are passed to `nfldb.aggregate`.
         """
+        self._sort_tables = [types.PlayPlayer]
         ids = self._ids('play_player', self._sorter)
         pset = _play_set(ids)
         player_pks = None
@@ -581,6 +588,7 @@ class Query (Condition):
         Executes the query and returns the results as a list of
         `nfldb.Player` objects.
         """
+        self._sort_tables = [types.Player]
         ids = self._ids('player', self._sorter)
         results = []
         q = 'SELECT %s FROM player %s %s'
@@ -745,6 +753,8 @@ class Query (Condition):
                 ids[table] = idents.intersection(add.get(table, IdSet.full()))
 
         def osql(table):
+            if table != as_table:
+                return ''
             return sorter.sql(tabtype=table_types[table], only_limit=True)
 
         def ids_game(cur):
@@ -903,7 +913,7 @@ class Sorter (object):
                 raise TypeError('hash not implemented')
         return K
 
-    def __init__(self, exprs=None, limit=None):
+    def __init__(self, exprs=None, limit=None, restraining=[]):
         def normal_expr(e):
             if isinstance(e, strtype):
                 return (e, 'DESC')
@@ -917,6 +927,7 @@ class Sorter (object):
 
         self.limit = int(limit or 0)
         self.exprs = []
+        self.restraining = restraining
         if exprs is not None:
             if isinstance(exprs, strtype) or isinstance(exprs, tuple):
                 self.exprs = [normal_expr(exprs)]
@@ -985,10 +996,7 @@ class Sorter (object):
         """
         if self.limit < 1:
             return False
-        for field, _ in self.exprs:
-            if field in tabtype._sql_fields:
-                return True
-        return False
+        return tabtype in self.restraining
 
     def _cmp(self, a, b):
         compare, geta = cmp, getattr
