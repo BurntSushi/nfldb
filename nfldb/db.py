@@ -27,7 +27,7 @@ __pdoc__['api_version'] = \
     """
 
 
-def config(fp=''):
+def config(config_path=''):
     """
     Reads and loads the configuration file containing PostgreSQL
     connection information. This function is used automatically
@@ -43,7 +43,7 @@ def config(fp=''):
     `$XDG_CONFIG_HOME/nfldb/config.ini`.
     """
     paths = [
-        fp,
+        config_path,
         path.join(sys.prefix, 'share', 'nfldb', 'config.ini'),
         path.join(os.getenv('XDG_CONFIG_HOME'), 'nfldb', 'config.ini'),
     ]
@@ -66,31 +66,32 @@ def config(fp=''):
 
 
 def connect(database=None, user=None, password=None, host=None, port=None,
-            timezone=None):
+            timezone=None, config_path=''):
     """
     Returns a `psycopg2._psycopg.connection` object from the
-    `psycopg2.connect`. If database is `None`, then `connect` will look
-    for a configuration file at `$XDG_CONFIG_HOME/nfldb/config.ini`
-    with the database connection information. Otherwise, the connection
-    will use the parameters given.
+    `psycopg2.connect` function. If database is `None`, then `connect`
+    will look for a configuration file using `nfldb.config` with
+    `config_path`. Otherwise, the connection will use the parameters
+    given.
+
+    If `database` is `None` and no config file can be found, then an
+    `IOError` exception is raised.
 
     This function will also compare the current schema version of the
     database against the API version `nfldb.api_version` and assert
     that they are equivalent. If the schema library version is less
     than the the API version, then the schema will be automatically
     upgraded. If the schema version is newer than the library version,
-    then this function will raise an assertion error.  An assertion
+    then this function will raise an assertion error. An assertion
     error will also be raised if the schema version is 0 and the
     database is not empty.
 
     N.B. The `timezone` parameter should be set to a value that
     PostgreSQL will accept. Select from the `pg_timezone_names` view
-    to get a list of valid time zones. (Like the other parameters,
-    when `database` is `None`, the `timezone` parameter is filled from
-    `config.ini`.)
+    to get a list of valid time zones.
     """
     if database is None:
-        conf = config()
+        conf = config(config_path=config_path)
         if conf is None:
             raise IOError("Could not find valid configuration file.")
 
@@ -162,8 +163,9 @@ def set_timezone(conn, timezone):
 
 def now():
     """
-    Returns the current date/time in UTC. It can be used to compare
-    against date/times in any of the `nfldb` objects.
+    Returns the current date/time in UTC as a `datetime.datetime`
+    object. It can be used to compare against date/times in any of the
+    `nfldb` objects without worrying about timezones.
     """
     return datetime.datetime.now(pytz.utc)
 
@@ -244,6 +246,17 @@ class Tx (object):
     a database cursor.)
     """
     def __init__(self, psycho_conn, name=None, factory=None):
+        """
+        `psycho_conn` is a DB connection returned from `nfldb.connect`,
+        `name` is passed as the `name` argument to the cursor
+        constructor (for server-side cursors), and `factory` is passed
+        as the `cursor_factory` parameter to the cursor constructor.
+
+        Note that the default cursor factory is
+        `psycopg2.extras.RealDictCursor`. However, using
+        `psycopg2.extensions.cursor` (the default tuple cursor) can be
+        much more efficient when fetching large result sets.
+        """
         tstatus = psycho_conn.get_transaction_status()
         self.__name = name
         self.__nested = tstatus == TRANSACTION_STATUS_INTRANS
@@ -298,9 +311,8 @@ def _big_insert(cursor, table, datas):
         return [v for _, v in xs]
     values = ', '.join(_mogrify(cursor, times(vals(data))) for data in datas)
 
-    cursor.execute('''
-        INSERT INTO %s (%s) VALUES %s
-    ''' % (table, insert_fields, values))
+    cursor.execute('INSERT INTO %s (%s) VALUES %s'
+                   % (table, insert_fields, values))
 
 
 def _upsert(cursor, table, data, pk):

@@ -30,8 +30,8 @@ def aggregate(objs):
     """
     Given any collection of Python objects that provide a
     `play_players` attribute, `aggregate` will return a list of
-    `PlayPlayer` objects with statistics aggregated over each player.
-    (As a special case, if an element in `objs` is itself a
+    `PlayPlayer` objects with statistics aggregated (summed) over each
+    player. (As a special case, if an element in `objs` is itself a
     `nfldb.PlayPlayer` object, then it is used and a `play_players`
     attribute is not rquired.)
 
@@ -40,6 +40,12 @@ def aggregate(objs):
 
     The order of the list returned is stable with respect to the
     order of players obtained from each element in `objs`.
+
+    It is recommended to use `nfldb.Query.aggregate` and
+    `nfldb.Query.as_aggregate` instead of this function since summing
+    statistics in the database is much faster. However, this function
+    is provided for aggregation that cannot be expressed by the query
+    interface.
     """
     summed = OrderedDict()
     for obj in objs:
@@ -156,6 +162,14 @@ def _prefix_and(*exprs, **kwargs):
 
 
 def _sql_pkey_in(cur, pkeys, ids, prefix=''):
+    """
+    Returns a SQL IN expression of the form `(pkey1, pkey2, ..., pkeyN)
+    IN ((val1, val2, ..., valN), ...)` where `pkeyi` is a member of
+    the list `pkeys` and `(val1, val2, ..., valN)` is a member in the
+    `nfldb.query.IdSet` `ids`.
+
+    If `prefix` is set, then it is used as a prefix for each `pkeyi`.
+    """
     pkeys = ['%s%s' % (prefix, pk) for pk in pkeys]
     if ids.is_full:
         return None
@@ -167,22 +181,34 @@ def _sql_pkey_in(cur, pkeys, ids, prefix=''):
 
 
 def _pk_play(cur, ids, tables=['game', 'drive']):
+    """
+    A convenience function for calling `_sql_pkey_in` when selecting
+    from the `play` or `play_player` tables. Namely, it only uses a
+    SQL IN expression for the `nfldb.query.IdSet` `ids` when it has
+    fewer than `nfldb.query._sql_max_in` values.
+
+    `tables` should be a list of tables to specify which primary keys
+    should be used. By default, only the `game` and `drive` tables
+    are allowed, since they are usually within the limits of a SQL
+    IN expression.
+    """
     pk = None
-    if ('play' in tables or 'play_player' in tables) \
-            and len(ids['play']) <= _sql_max_in:
-        pk = _sql_pkey_in(cur, ['gsis_id', 'drive_id', 'play_id'], ids['play'])
-    if 'drive' in tables and len(ids['drive']) <= _sql_max_in:
-        pk = _sql_pkey_in(cur, ['gsis_id', 'drive_id'], ids['drive'])
+    is_play = 'play' in tables or 'play_player' in tables
     if 'game' in tables and pk is None:
         pk = _sql_pkey_in(cur, ['gsis_id'], ids['game'])
+    elif 'drive' in tables and len(ids['drive']) <= _sql_max_in:
+        pk = _sql_pkey_in(cur, ['gsis_id', 'drive_id'], ids['drive'])
+    elif is_play and len(ids['play']) <= _sql_max_in:
+        pk = _sql_pkey_in(cur, ['gsis_id', 'drive_id', 'play_id'], ids['play'])
     return pk
 
 
 def _play_set(ids):
     """
-    Returns a value representing a set of plays in correspondence with
-    the given `ids` dictionary. The value may be any combination
-    of drive and play identifiers. Use `in_play_set` for membership
+    Returns a value representing a set of plays in correspondence
+    with the given `ids` dictionary mapping `play` or `drive` to
+    `nfldb.query.IdSet`s. The value may be any combination of drive and
+    play identifiers. Use `nfldb.query._in_play_set` for membership
     testing.
     """
     if not ids['play'].is_full:
@@ -198,7 +224,8 @@ def _in_play_set(pset, play_pk):
     Given a tuple `(gsis_id, drive_id, play_id)`, return `True`
     if and only if it exists in the play set `pset`.
 
-    Valid values for `pset` can be constructed with `play_set`.
+    Valid values for `pset` can be constructed with
+    `nfldb.query._play_set`.
     """
     if pset is None:  # No criteria for drive/play. Always true, then!
         return True
@@ -241,8 +268,11 @@ class Comparison (Condition):
     A representation of a single comparison in a `nfldb.Query`.
 
     This corresponds to a field name, a value and one of the following
-    operators: `=`, `!=`, `<`, `<=`, `>` or `>=`.
+    operators: `=`, `!=`, `<`, `<=`, `>` or `>=`. A value may be a list
+    or a tuple, in which case PostgreSQL's `ANY` is used along with the
+    given operator.
     """
+
     def __init__(self, tabtype, kw, value):
         """
         Introduces a new condition given a user specified keyword `kw`
@@ -304,16 +334,112 @@ class Comparison (Condition):
 
 
 def QueryOR(db):
-    """An alias for `nfldb.Query(db, orelse=True)`."""
+    """
+    Creates a disjunctive `nfldb.Query` object, where every
+    condition is combined disjunctively. Namely, it is an alias for
+    `nfldb.Query(db, orelse=True)`.
+    """
     return Query(db, orelse=True)
 
 
 class Query (Condition):
     """
-    A query represents a set of criteria to search a database.
+    A query represents a set of criteria to search nfldb's PostgreSQL
+    database. Its primary feature is to provide a high-level API for
+    searching NFL game, drive, play and player data very quickly.
+
+    The basic workflow is to specify all of the search criteria that
+    you want, and then use one of the `as_*` methods to actually
+    perform the search and return results from the database.
+
+    For example, to get all Patriots games as `nfldb.Game` objects from
+    the 2012 regular season, we could do:
+
+        #!python
+        q = Query(db).game(season_year=2012, season_type='Regular', team='NE')
+        for game in q.as_games():
+            print game
+
+    Other comparison operators like `<` or `>=` can also be used. To use
+    them, append a suffix like `__lt` to the end of a field name. So to get
+    all games with a home score greater than or equal to 50:
+
+        #!python
+        q = Query(db).game(home_score__ge=50)
+        for game in q.as_games():
+            print game
+
+    Other suffixes are available: `__lt` for `<`, `__le` for `<=`,
+    `__gt` for `>`, `__ge` for `>=`, `__ne` for `!=` and `__eq` for
+    `==`. Although, the `__eq` suffix is used by default and is
+    therefore never necessary to use.
+
+    More criteria can be specified by chaining search criteria. For
+    example, to get only plays as `nfldb.Play` objects where Tom Brady
+    threw a touchdown pass:
+
+        #!python
+        q = Query(db).game(season_year=2012, season_type='Regular')
+        q.player(full_name="Tom Brady").play(passing_tds=1)
+        for play in q.as_plays():
+            print play
+
+    By default, all critera specified are combined conjunctively (i.e.,
+    all criteria must be met for each result returned). However,
+    sometimes you may want to specify disjunctive criteria (i.e., any
+    of the criteria can be met for a result to be returned). To do this
+    for a single field, simply use a list. For example, to get all
+    Patriot games from the 2009 to 2013 seasons:
+
+        #!python
+        q = Query(db).game(season_type='Regular', team='NE')
+        q.game(season_year=[2009, 2010, 2011, 2012, 2013])
+        for game in q.as_games():
+            print game
+
+    Disjunctions can also be applied to multiple fields by creating a
+    `nfldb.Query` object with `nfldb.QueryOR`. For example, to find
+    all games where either team had more than 50 points:
+
+        #!python
+        q = QueryOR(db).game(home_score__ge=50, away_score__ge=50)
+        for game in q.as_games():
+            print game
+
+    Finally, multiple queries can be combined with `nfldb.Query.andalso`.
+    For example, to restrict the last search to games in the 2012 regular
+    season:
+
+        #!python
+        big_score = QueryOR(db).game(home_score__ge=50, away_score__ge=50)
+
+        q = Query(db).game(season_year=2012, season_type='Regular')
+        q.andalso(big_score)
+        for game in q.as_games():
+            print game
+
+    This is only the beginning of what can be done. More examples that run
+    the gamut can be found on nfldb's wiki page for
+    [searching with the query interface](http://goo.gl/za3xdu).
     """
 
     def __init__(self, db, orelse=False):
+        """
+        Introduces a new `nfldb.Query` object. Criteria can be
+        added with any combination of the `nfldb.Query.game`,
+        `nfldb.Query.drive`, `nfldb.Query.play`, `nfldb.Query.player`
+        and `nfldb.Query.aggregate` methods. Results can
+        then be retrieved with any of the `as_*` methods:
+        `nfldb.Query.as_games`, `nfldb.Query.as_drives`,
+        `nfldb.Query.as_plays`, `nfldb.Query.as_play_players`,
+        `nfldb.Query.as_players` and `nfldb.Query.as_aggregate`.
+
+        Note that if aggregate criteria are specified with
+        `nfldb.Query.aggregate`, then the **only** way to retrieve
+        results is with the `nfldb.Query.as_aggregate` method. Invoking
+        any of the other `as_*` methods will raise an assertion error.
+        """
+
         self._db = db
         """A psycopg2 database connection object."""
 
@@ -349,10 +475,76 @@ class Query (Condition):
             self._agg_default_cond = self._agg_andalso
 
     def sort(self, exprs):
+        """
+        Specify sorting criteria for the result set returned by
+        using sort expressions. A sort expression is a tuple with
+        two elements: a field to sort by and the order to use. The
+        field should correspond to an attribute of the objects you're
+        returning and the order should be `asc` for ascending (smallest
+        to biggest) or `desc` for descending (biggest to smallest).
+
+        For example, `('passing_yds', 'desc')` would sort plays by the
+        number of passing yards in the play, with the biggest coming
+        first.
+
+        Remember that a sort field must be an attribute of the
+        results being returned. For example, you can't sort plays by
+        `home_score`, which is an attribute of a `nfldb.Game` object.
+        If you require this behavior, you will need to do it in Python
+        with its `sorted` built in function. (Or alternatively, use
+        two separate queries if the result set is large.)
+
+        You may provide multiple sort expressions. For example,
+        `[('gsis_id', 'asc'), ('time', 'asc'), ('play_id', 'asc')]`
+        would sort plays in the order in which they occurred within
+        each game.
+
+        `exprs` may also just be a string specifying a single
+        field which defaults to a descending order. For example,
+        `sort('passing_yds')` sorts plays by passing yards in
+        descending order.
+
+        If `exprs` is set to the empty list, then sorting will be
+        disabled for this query.
+
+        Note that sorting criteria can be combined with
+        `nfldb.Query.limit` to limit results which can dramatically
+        speed up larger searches. For example, to fetch the top 10
+        passing plays in the 2012 season:
+
+            #!python
+            q = Query(db).game(season_year=2012, season_type='Regular')
+            q.sort('passing_yds').limit(10)
+            for p in q.as_plays():
+                print p
+
+        A more naive approach might be to fetch all plays and sort them
+        with Python:
+
+            #!python
+            q = Query(db).game(season_year=2012, season_type='Regular')
+            plays = q.as_plays()
+
+            plays = sorted(plays, key=lambda p: p.passing_yds, reverse=True)
+            for p in plays[:10]:
+                print p
+
+        But this is over **43 times slower** on my machine than using
+        `nfldb.Query.sort` and `nfldb.Query.limit`. (The performance
+        difference is due to making PostgreSQL perform the search and
+        restricting the number of results returned to process.)
+        """
         self._sort_exprs = exprs
         return self
 
     def limit(self, count):
+        """
+        Limits the number of results to the integer `count`. If `count` is
+        `0` (the default), then no limiting is done.
+
+        See the documentation for `nfldb.Query.sort` for an example on how
+        to combine it with `nfldb.Query.limit` to get results quickly.
+        """
         self._limit = count
         return self
 
@@ -360,6 +552,10 @@ class Query (Condition):
     def _sorter(self):
         return Sorter(self._sort_exprs, self._limit,
                       restraining=self._sort_tables)
+
+    def _assert_no_aggregate(self):
+        assert len(self._agg_andalso) == 0 and len(self._agg_orelse) == 0, \
+            'aggregate criteria are only compatible with as_aggregate'
 
     def andalso(self, *conds):
         """
@@ -372,13 +568,20 @@ class Query (Condition):
     def game(self, **kw):
         """
         Specify search criteria for an NFL game. The possible fields
-        correspond to columns in the SQL table (or derived columns).
+        correspond to columns in the `game` table (or derived columns).
         They are documented as instance variables in the `nfldb.Game`
-        class. In addition, there are some special fields that provide
+        class. Additionally, there are some special fields that provide
         convenient access to common conditions:
 
           * **team** - Find games that the team given played in, regardless
                        of whether it is the home or away team.
+
+        Please see the documentation for `nfldb.Query` for examples on
+        how to specify search criteria.
+
+        Please
+        [open an issue](https://github.com/BurntSushi/nfldb/issues/new)
+        if you can think of other special fields to add.
         """
         _append_conds(self._default_cond, types.Game, kw)
         if 'team' in kw:
@@ -387,10 +590,32 @@ class Query (Condition):
         return self
 
     def drive(self, **kw):
+        """
+        Specify search criteria for a drive. The possible fields
+        correspond to columns in the `drive` table (or derived
+        columns). They are documented as instance variables in the
+        `nfldb.Drive` class.
+
+        Please see the documentation for `nfldb.Query` for examples on
+        how to specify search criteria.
+        """
         _append_conds(self._default_cond, types.Drive, kw)
         return self
 
     def play(self, **kw):
+        """
+        Specify search criteria for a play. The possible fields
+        correspond to columns in the `play` or `play_player` tables (or
+        derived columns). They are documented as instance variables in
+        the `nfldb.Play` and `nfldb.PlayPlayer` classes. Additionally,
+        the fields listed on the
+        [statistical categories](http://goo.gl/1qYG3C)
+        wiki page may be used. That includes **both** `play` and
+        `player` statistical categories.
+
+        Please see the documentation for `nfldb.Query` for examples on
+        how to specify search criteria.
+        """
         _append_conds(self._default_cond, types.Play, kw)
         _append_conds(self._default_cond, types.PlayPlayer, kw)
 
@@ -412,6 +637,15 @@ class Query (Condition):
         return self
 
     def player(self, **kw):
+        """
+        Specify search criteria for a player. The possible fields
+        correspond to columns in the `player` table (or derived
+        columns). They are documented as instance variables in the
+        `nfldb.Player` class.
+
+        Please see the documentation for `nfldb.Query` for examples on
+        how to specify search criteria.
+        """
         _append_conds(self._default_cond, types.Player, kw)
         return self
 
@@ -420,9 +654,28 @@ class Query (Condition):
         This is just like `nfldb.Query.play`, except the search
         parameters are applied to aggregate statistics.
 
+        For example, to retrieve all quarterbacks who passed for at
+        least 4000 yards in the 2012 season:
+
+            #!python
+            q = Query(db).game(season_year=2012, season_type='Regular')
+            q.aggregate(passing_yds__ge=4000)
+            for pp in q.as_aggregate():
+                print pp.player, pp.passing_yds
+
+        Aggregate results can also be sorted:
+
+            #!python
+            for pp in q.sort('passing_yds').as_aggregate():
+                print pp.player, pp.passing_yds
+
         Note that this method can **only** be used with
-        `nfldb.Query.as_aggregate`. Use with any of the other `as_*`
-        methods will result in an assertion error.
+        `nfldb.Query.as_aggregate`. Use with any of the other
+        `as_*` methods will result in an assertion error. Note
+        though that regular criteria can still be specified with
+        `nfldb.Query.game`, `nfldb.Query.play`, etc. (Regular criteria
+        restrict *what to aggregate* while aggregate criteria restrict
+        *aggregated results*.)
         """
         _append_conds(self._agg_default_cond, types.Play, kw)
         _append_conds(self._agg_default_cond, types.PlayPlayer, kw)
@@ -433,6 +686,8 @@ class Query (Condition):
         Executes the query and returns the results as a list of
         `nfldb.Game` objects.
         """
+        self._assert_no_aggregate()
+
         self._sort_tables = [types.Game]
         ids = self._ids('game', self._sorter)
         results = []
@@ -454,6 +709,8 @@ class Query (Condition):
         Executes the query and returns the results as a list of
         `nfldb.Drive` objects.
         """
+        self._assert_no_aggregate()
+
         self._sort_tables = [types.Drive]
         ids = self._ids('drive', self._sorter)
         tables = self._tables()
@@ -482,6 +739,8 @@ class Query (Condition):
 
         The primary key membership SQL expression is also returned.
         """
+        self._assert_no_aggregate()
+
         plays = OrderedDict()
         ids = self._ids('play', self._sorter)
         pset = _play_set(ids)
@@ -524,6 +783,8 @@ class Query (Condition):
         sorting criteria specified to player statistics will be
         ignored.
         """
+        self._assert_no_aggregate()
+
         self._sort_tables = [types.Play, types.PlayPlayer]
         plays, pkey = self._as_plays()
         if not fill:
@@ -554,8 +815,13 @@ class Query (Condition):
 
         This provides a way to access player statistics directly
         by bypassing play data. Usually the results of this method
-        are passed to `nfldb.aggregate`.
+        are passed to `nfldb.aggregate`. It is recommended to use
+        `nfldb.Query.aggregate` and `nfldb.Query.as_aggregate` when
+        possible, since it is significantly faster to sum statistics in
+        the database as opposed to Python.
         """
+        self._assert_no_aggregate()
+
         self._sort_tables = [types.PlayPlayer]
         ids = self._ids('play_player', self._sorter)
         pset = _play_set(ids)
@@ -592,6 +858,8 @@ class Query (Condition):
         Executes the query and returns the results as a list of
         `nfldb.Player` objects.
         """
+        self._assert_no_aggregate()
+
         self._sort_tables = [types.Player]
         ids = self._ids('player', self._sorter)
         results = []
@@ -617,11 +885,6 @@ class Query (Condition):
         statistics while `nfldb.aggregate` computes them in Python
         code.
 
-        This method is slightly more restrictive in that you cannot
-        specify criteria for searching by drive data. If any are
-        specified when this method is called, an assertion error will
-        be raised. This restriction may be relaxed in the future.
-
         If any sorting criteria is specified, it is applied to the
         aggregate *player* values only.
         """
@@ -636,17 +899,13 @@ class Query (Condition):
         # into a temporary table and use a subquery with an `IN` expression,
         # which I'm told isn't subject to the normal limitations. However,
         # I'm not sure if it's economical to run a query against a big
-        # table with so many `OR` expressions.
+        # table with so many `OR` expressions. More convincingly, the
+        # approach I've used below seems to be *fast enough*.
         #
         # Ideas and experiments are welcome. Using a join seems like the
-        # most sensible approach at the moment, but I'd like to experiment
-        # with other ideas in the future.
-        #
-        # N.B. I'm currently omitting the drive to avoid joining with
-        # another table. Not a very good reason...
+        # most sensible approach at the moment (and it's simple!), but I'd like
+        # to experiment with other ideas in the future.
         tables, agg_tables = self._tables(), self._agg_tables()
-        assert 'drive' not in tables, 'cannot use drive criteria in aggregate'
-
         gids, player_ids = None, None
         joins = defaultdict(str)
         results = []
@@ -657,7 +916,7 @@ class Query (Condition):
                     LEFT JOIN game
                     ON play_player.gsis_id = game.gsis_id
                 '''
-            if 'drive' in tables or 'drive' in agg_tables:
+            if 'drive' in tables:
                 joins['drive'] = '''
                     LEFT JOIN drive
                     ON play_player.gsis_id = drive.gsis_id
@@ -714,22 +973,30 @@ class Query (Condition):
                 results.append(pp)
         return results
 
-    def _has_table(self, _):
-        return True
-
     def _tables(self):
+        """Returns all the tables referenced in the search criteria."""
         tabs = set()
         for cond in self._andalso + self._orelse:
             tabs = tabs.union(cond._tables())
         return tabs
 
     def _agg_tables(self):
+        """
+        Returns all the tables referenced in the aggregate search criteria.
+        """
         tabs = set()
         for cond in self._agg_andalso + self._agg_orelse:
             tabs = tabs.union(cond._tables())
         return tabs
 
     def _sql_where(self, cur, tables, prefix=None, aggregate=False):
+        """
+        Returns a WHERE expression representing the search criteria
+        in `self` and restricted to the tables in `tables`.
+
+        If `aggregate` is `True`, then the appropriate aggregate
+        functions are used.
+        """
         if aggregate:
             return _sql_where(cur, tables, self._agg_andalso, self._agg_orelse,
                               prefix=prefix, aggregate=aggregate)
@@ -748,6 +1015,15 @@ class Query (Condition):
         Each `IdSet` contains primary key values for that table. In the
         case of the `drive` and `play` table, those values are tuples.
         """
+        # This method is where most of the complexity in this module lives,
+        # since it is where most of the performance considerations are made.
+        # Namely, the search criteria in `self` are spliced out by table
+        # and used to find sets of primary keys for each table. The primary
+        # keys are then used to filter subsequent searches on tables.
+        #
+        # The actual data returned is confined to the identifiers returned
+        # from this method.
+
         # Initialize sets to "full". This distinguishes an empty result
         # set and a lack of search.
         ids = dict([(k, IdSet.full())
@@ -767,7 +1043,21 @@ class Query (Condition):
                 ids[table] = idents.intersection(add.get(table, IdSet.full()))
 
         def osql(table):
-            if table != as_table:
+            if table == 'play_player' and as_table == 'play':
+                # A special case to handle weird sorting issues since
+                # some tables use the same column names.
+                # When sorting plays, we only want to allow sorting on
+                # player statistical fields and nothing else (like gsis_id,
+                # play_id, etc.).
+                player_stat = False
+                for field, _ in sorter.exprs:
+                    is_derived = field in types.PlayPlayer._sql_derived
+                    if field in types._player_categories or is_derived:
+                        player_stat = True
+                        break
+                if not player_stat:
+                    return ''
+            elif table != as_table:
                 return ''
             return sorter.sql(tabtype=table_types[table], only_limit=True)
 
@@ -866,7 +1156,7 @@ class Query (Condition):
 
             def should_search(table):
                 tabtype = table_types[table]
-                return table in tables or sorter.is_restraining(tabtype)
+                return where(table) or sorter.is_restraining(tabtype)
 
             if tables is None:
                 tables = self._tables()
@@ -1010,7 +1300,12 @@ class Sorter (object):
         """
         if self.limit < 1:
             return False
-        return tabtype in self.restraining
+        if tabtype not in self.restraining:
+            return False
+        for field, _ in self.exprs:
+            if field in tabtype._sql_fields:
+                return True
+        return False
 
     def _cmp(self, a, b):
         compare, geta = cmp, getattr

@@ -9,15 +9,18 @@ from nfldb.db import api_version, connect, now, set_timezone, schema_version
 from nfldb.db import Tx
 from nfldb.query import __pdoc__ as __query_pdoc__
 from nfldb.query import aggregate, current, Query, QueryOR
+from nfldb.team import standard_team
 from nfldb.types import __pdoc__ as __types_pdoc__
 from nfldb.types import stat_categories
 from nfldb.types import Category, Clock, Enums, Drive, FieldPosition, Game
 from nfldb.types import Play, Player, PlayPlayer, PossessionTime, Team
+from nfldb.version import __pdoc__ as __version_pdoc__
 from nfldb.version import __version__
 
 __pdoc__ = __db_pdoc__
 __pdoc__ = dict(__pdoc__, **__query_pdoc__)
 __pdoc__ = dict(__pdoc__, **__types_pdoc__)
+__pdoc__ = dict(__pdoc__, **__version_pdoc__)
 
 
 # Export selected identifiers from sub-modules.
@@ -28,6 +31,9 @@ __all__ = [
 
     # nfldb.query
     'aggregate', 'current', 'Query', 'QueryOR',
+
+    # nfldb.team
+    'standard_team',
 
     # nfldb.types
     'stat_categories',

@@ -14,7 +14,7 @@ categories = [
     (86, False, "player", "defense_puntblk", "Defensive player blocked a punt."),
     (110, False, "player", "defense_qbhit", "Defensive player knocked the quarterback to the ground and the quarterback was not the ball carrier."),
     (89, False, "player", "defense_safe", "Tackle by a defensive player that resulted in a safety. This is in addition to a tackle."),
-    (84, True, "player", "defense_sk", "Defensive player sacked the quarterback."),
+    (84, True, "player", "defense_sk", "Defensive player sacked the quarterback. Note that this is the only field that is a floating point number. Namely, there can be half-credit sacks."),
     (84, False, "player", "defense_sk_yds", "Yards lost as a result of a sack."),
     (80, False, "player", "defense_tkl", "A defensive player tackle. (This include defense_tkl_primary.)"),
     (120, False, "player", "defense_tkl_loss", "Defensive player tackled the runner behind the line of scrimmage. Play must have ended, player must have received a tackle stat, has to be an offensive player tackled."),

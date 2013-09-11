@@ -59,12 +59,11 @@ def _nflgame_clock(clock):
 
 def _play_time(drive, play, next_play):
     """
-    Given a `nfldb.Play` object and a `nfldb.Drive` object, returns
-    a `nfldb.Clock` object representing the play's game clock.
-    `next_play` must be a `nfldb.Play` object corresponding to the
-    next play in `drive` with valid time data.  It may be `None`, but
-    if `play` corresponds to a timeout or a two-minute warning, an
-    assertion error will be raised.
+    Given a `nfldb.Play` object without time information and a
+    `nfldb.Drive` object, returns a `nfldb.Clock` object representing
+    the play's game clock. `next_play` must be a `nfldb.Play` object
+    corresponding to the next play in `drive` with valid time data, or
+    it can be `None` if one isn't available.
 
     This is used for special non-plays like "Two-Minute Warning" or
     timeouts. The source JSON data leaves the clock field NULL, but we
@@ -133,6 +132,13 @@ def _as_row(fields, obj):
 
 
 def _select_fields(tabtype, prefix=None):
+    """
+    Return a valid SQL SELECT string for the given table type. If
+    `prefix` is not `None`, then it will be used as a prefix for each
+    SQL field.
+
+    This function includes derived fields in `tabtype`.
+    """
     sql = lambda f: tabtype._as_sql(f, prefix=prefix)
     select = [sql(f) for f in tabtype._sql_columns]
     select += ['%s AS %s' % (sql(f), f) for f in tabtype._sql_derived]
@@ -140,6 +146,17 @@ def _select_fields(tabtype, prefix=None):
 
 
 def _sum_fields(tabtype, prefix=None):
+    """
+    Return a valid SQL SELECT string for an aggregate query. This
+    is similar to `nfldb._select_fields`, but it uses the `SUM`
+    function on each field; including derived fields in `tabtype`.
+    This function knows which SQL columns to aggregate by inspecting
+    `nfldb.stat_categories`.
+
+    Note that this can only be used for `nfldb.Play` and
+    `nfldb.PlayPlayer` table types. Any other value will cause an
+    assertion error.
+    """
     assert tabtype in (Play, PlayPlayer)
 
     if tabtype == Play:
@@ -153,10 +170,52 @@ def _sum_fields(tabtype, prefix=None):
     return ', '.join(select)
 
 
+def _total_ordering(cls):
+    """Class decorator that fills in missing ordering methods"""
+    # Taken from Python 2.7 stdlib to support 2.6.
+    convert = {
+        '__lt__': [('__gt__',
+                    lambda self, other: not (self < other or self == other)),
+                   ('__le__',
+                    lambda self, other: self < other or self == other),
+                   ('__ge__',
+                    lambda self, other: not self < other)],
+        '__le__': [('__ge__',
+                    lambda self, other: not self <= other or self == other),
+                   ('__lt__',
+                    lambda self, other: self <= other and not self == other),
+                   ('__gt__',
+                    lambda self, other: not self <= other)],
+        '__gt__': [('__lt__',
+                    lambda self, other: not (self > other or self == other)),
+                   ('__ge__',
+                    lambda self, other: self > other or self == other),
+                   ('__le__',
+                    lambda self, other: not self > other)],
+        '__ge__': [('__le__',
+                    lambda self, other: (not self >= other) or self == other),
+                   ('__gt__',
+                    lambda self, other: self >= other and not self == other),
+                   ('__lt__',
+                    lambda self, other: not self >= other)]
+    }
+    roots = set(dir(cls)) & set(convert)
+    if not roots:
+        raise ValueError('must define at least one ordering operation: '
+                         '< > <= >=')
+    root = max(roots)       # prefer __lt__ to __le__ to __gt__ to __ge__
+    for opname, opfunc in convert[root]:
+        if opname not in roots:
+            opfunc.__name__ = opname
+            opfunc.__doc__ = getattr(int, opname).__doc__
+            setattr(cls, opname, opfunc)
+    return cls
+
+
 class _Enum (enum.Enum):
     """
-    Conforms to the `getquoted` interface in psycopg2.
-    This maps enum types to SQL.
+    Conforms to the `getquoted` interface in psycopg2. This maps enum
+    types to SQL.
     """
     @staticmethod
     def _pg_cast(enum):
@@ -167,11 +226,6 @@ class _Enum (enum.Enum):
         """
         return lambda sqlv, _: None if not sqlv else enum[sqlv]
 
-    def __lt__(self, other):
-        if self.__class__ is other.__class__:
-            return self._value_ < other._value_
-        return NotImplemented
-
     def __conform__(self, proto):
         if proto is ISQLQuote:
             return AsIs("'%s'" % self.name)
@@ -180,13 +234,37 @@ class _Enum (enum.Enum):
     def __str__(self):
         return self.name
 
+    # Why can't I use the `_total_ordering` decorator on this class?
+
+    def __lt__(self, other):
+        if self.__class__ is not other.__class__:
+            return NotImplemented
+        return self._value_ < other._value_
+
+    def __le__(self, other):
+        if self.__class__ is not other.__class__:
+            return NotImplemented
+        return self._value_ <= other._value_
+
+    def __gt__(self, other):
+        if self.__class__ is not other.__class__:
+            return NotImplemented
+        return self._value_ > other._value_
+
+    def __ge__(self, other):
+        if self.__class__ is not other.__class__:
+            return NotImplemented
+        return self._value_ >= other._value_
+
 
 class Enums (object):
     """
     Enums groups all enum types used in the database schema.
     All possible values for each enum type are represented as lists.
     The ordering of each list is the same as the ordering in the
-    database.
+    database. In particular, this ordering specifies a total ordering
+    that can be used in Python code to compare values in the same
+    enumeration.
     """
 
     game_phase = _Enum('game_phase',
@@ -295,11 +373,92 @@ class Enums (object):
     }
 
 
+class Category (object):
+    """
+    Represents meta data about a statistical category. This includes
+    the category's scope, GSIS identifier, name and short description.
+    """
+    __slots__ = ['category_id', 'gsis_number', 'category_type',
+                 'is_real', 'description']
+
+    def __init__(self, category_id, gsis_number, category_type,
+                 is_real, description):
+        self.category_id = category_id
+        """
+        A unique name for this category.
+        """
+        self.gsis_number = gsis_number
+        """
+        A unique numeric identifier for this category.
+        """
+        self.category_type = category_type
+        """
+        The scope of this category represented with
+        `nfldb.Enums.category_scope`.
+        """
+        self.is_real = is_real
+        """
+        Whether this statistic is a whole number of not. Currently,
+        only the `defense_sk` statistic has `Category.is_real` set to
+        `True`.
+        """
+        self.description = description
+        """
+        A free-form text description of this category.
+        """
+
+    @property
+    def _sql_field(self):
+        """
+        The SQL definition of this column. Statistics are always
+        NOT NULL and have a default value of `0`.
+
+        When `Category.is_real` is `True`, then the SQL type is `real`.
+        Otherwise, it's `smallint`.
+        """
+        typ = 'real' if self.is_real else 'smallint'
+        default = '0.0' if self.is_real else '0'
+        return '%s %s NOT NULL DEFAULT %s' % (self.category_id, typ, default)
+
+    def __str__(self):
+        return self.category_id
+
+    def __eq__(self, other):
+        return self.category_id == other.category_id
+
+
+# We've got to put the stat category stuff here because we need the
+# Enums class defined. But `Play` and `PlayPlayer` need these
+# categories to fill in __slots__ in their definition too. Ugly.
+stat_categories = _stat_categories()
+__pdoc__['stat_categories'] = """
+An ordered dictionary of every statistical category available for
+play-by-play data. The keys are the category identifier (e.g.,
+`passing_yds`) and the values are `nfldb.Category` objects.
+"""
+
+_play_categories = OrderedDict(
+    [(n, c) for n, c in stat_categories.items()
+     if c.category_type is Enums.category_scope.play])
+_player_categories = OrderedDict(
+    [(n, c) for n, c in stat_categories.items()
+     if c.category_type is Enums.category_scope.player])
+
+# Let's be awesome and add auto docs.
+for cat in _play_categories.values():
+    __pdoc__['Play.%s' % cat.category_id] = None
+for cat in _player_categories.values():
+    __pdoc__['PlayPlayer.%s' % cat.category_id] = None
+
+
 class Team (object):
     """
     Represents information about an NFL team. This includes its
     standard three letter abbreviation, city and mascot name.
     """
+    # BUG: If multiple databases are used with different team information,
+    # this class won't behave correctly since it's using a global cache.
+
     __slots__ = ['team_id', 'city', 'name']
     __cache = defaultdict(dict)
 
@@ -311,11 +470,10 @@ class Team (object):
 
     def __init__(self, db, abbr):
         """
-        Introduces a new team given its standard abbreviation and a
-        database connection. The database connection is used to
-        retrieve other team information if it isn't cached already.
-
-        Note that since team data is small, it is cached.
+        Introduces a new team given an abbreviation and a database
+        connection. The database connection is used to retrieve other
+        team information if it isn't cached already. The abbreviation
+        given is passed to `nfldb.standard_team` for you.
         """
         if hasattr(self, 'team_id'):
             # Loaded from cache.
@@ -352,69 +510,25 @@ class Team (object):
         return None
 
 
-class Category (object):
-    """
-    Represents meta data about a statistical category. This includes
-    the categorie's scope, GSIS identifier, name and short description.
-    """
-    __slots__ = ['category_id', 'gsis_number', 'category_type',
-                 'is_real', 'description']
-
-    def __init__(self, category_id, gsis_number, category_type,
-                 is_real, description):
-        self.category_id = category_id
-        """
-        A unique name for this category.
-        """
-        self.gsis_number = gsis_number
-        """
-        A unique numeric identifier for this category.
-        """
-        self.category_type = category_type
-        """
-        The scope of this category represented with
-        `nfldb.Enums.category_scope`.
-        """
-        self.is_real = is_real
-        """
-        Whether this statistic is a whole number of not. Currently,
-        only the `defense_sk` statistic has `Category.is_real` set to
-        `True`.
-        """
-        self.description = description
-        """
-        A free-form text description of this category.
-        """
-
-    @property
-    def _sql_field(self):
-        """
-        The SQL definition of this column.
-        """
-        typ = 'real' if self.is_real else 'smallint'
-        default = '0.0' if self.is_real else '0'
-        return '%s %s NOT NULL DEFAULT %s' % (self.category_id, typ, default)
-
-    def __str__(self):
-        return self.category_id
-
-    def __eq__(self, other):
-        return self.category_id == other.category_id
-
-
+@_total_ordering
 class FieldPosition (object):
     """
     Represents field position.
 
-    The representation here is an integer offset where the 50 yard line
-    corresponds to '0'. Being in the own territory corresponds to a negative
-    offset while being in the opponent's territory corresponds to a positive
-    offset.
+    The representation is an integer offset where the 50 yard line
+    corresponds to '0'. Being in one's own territory corresponds to a
+    negative offset while being in the opponent's territory corresponds
+    to a positive offset.
 
     e.g., NE has the ball on the NE 45, the offset is -5.
     e.g., NE has the ball on the NYG 2, the offset is 48.
+
+    This class also defines a total ordering on field
+    positions. Namely, given f1 and f2, f1 < f2 if and only if f2
+    is closer to the goal line for the team with possession of the
+    football.
     """
-    __slots__ = ['__offset']
+    __slots__ = ['_offset']
 
     @staticmethod
     def _pg_cast(sqlv, cursor):
@@ -422,16 +536,38 @@ class FieldPosition (object):
             return FieldPosition(None)
         return FieldPosition(int(sqlv[1:-1]))
 
+    @staticmethod
+    def from_str(pos):
+        """
+        Given a string `pos` in the format `FIELD YARDLINE`, this
+        returns a new `FieldPosition` object representing the yardline
+        given. `FIELD` must be the string `OWN` or `OPP` and `YARDLINE`
+        must be an integer in the range `[0, 50]`.
+
+        For example, `OPP 19` corresponds to an offset of `31`
+        and `OWN 5` corresponds to an offset of `-45`. Midfield can be
+        expressed as either `OWN 0` or `OPP 0`.
+        """
+        field, yrdline = pos.split(' ')
+        field, yrdline = field.upper(), int(yrdline)
+        assert field in ('OWN', 'OPP')
+        assert 0 <= yrdline <= 50
+
+        if field == 'OWN':
+            return FieldPosition(yrdline - 50)
+        else:
+            return FieldPosition(50 - yrdline)
+
     def __init__(self, offset):
         """
         Makes a new `nfldb.FieldPosition` given a field `offset`.
         `offset` must be in the integer range [-50, 50].
         """
         if offset is None:
-            self.__offset = None
+            self._offset = None
             return
         assert -50 <= offset <= 50
-        self.__offset = offset
+        self._offset = offset
 
     def add_yards(self, yards):
         """
@@ -439,7 +575,7 @@ class FieldPosition (object):
         field position. The value of `yards` may be negative.
         """
         assert self.valid
-        newoffset = max(-50, min(50, self.__offset + yards))
+        newoffset = max(-50, min(50, self._offset + yards))
         return FieldPosition(newoffset)
 
     @property
@@ -451,22 +587,26 @@ class FieldPosition (object):
         Invalid field positions cannot be compared with other field
         positions.
         """
-        return self.__offset is not None
+        return self._offset is not None
 
     def __lt__(self, other):
+        if self.__class__ is not other.__class__:
+            return NotImplemented
         assert self.valid and other.valid
-        return self.__offset < other.__offset
+        return self._offset < other._offset
 
     def __eq__(self, other):
-        return self.__offset == other.__offset
+        if self.__class__ is not other.__class__:
+            return NotImplemented
+        return self._offset == other._offset
 
     def __str__(self):
         if not self.valid:
             return 'N/A'
-        elif self.__offset > 0:
-            return 'OPP %d' % (50 - self.__offset)
-        elif self.__offset < 0:
-            return 'OWN %d' % (50 + self.__offset)
+        elif self._offset > 0:
+            return 'OPP %d' % (50 - self._offset)
+        elif self._offset < 0:
+            return 'OWN %d' % (50 + self._offset)
         else:
             return 'MIDFIELD'
 
@@ -475,13 +615,18 @@ class FieldPosition (object):
             if not self.valid:
                 return AsIs("NULL")
             else:
-                return AsIs("ROW(%d)::field_pos" % self.__offset)
+                return AsIs("ROW(%d)::field_pos" % self._offset)
         return None
 
 
+@_total_ordering
 class PossessionTime (object):
     """
     Represents the possession time of a drive in seconds.
+
+    This class defines a total ordering on possession times. Namely, p1
+    < p2 if and only if p2 corresponds to a longer time of possession
+    than p1.
     """
     __slots__ = ['__seconds']
 
@@ -521,25 +666,28 @@ class PossessionTime (object):
     @property
     def total_seconds(self):
         """
-        Returns the total seconds elapsed for this possession.
+        The total seconds elapsed for this possession.
+        `0` is returned if this is not a valid possession time.
         """
         return self.__seconds if self.valid else 0
 
     @property
     def minutes(self):
         """
-        Returns the number of whole minutes for a possession.
+        The number of whole minutes for a possession.
         e.g., `0:59` would be `0` minutes and `4:01` would be `4`
         minutes.
+        `0` is returned if this is not a valid possession time.
         """
         return (self.__seconds // 60) if self.valid else 0
 
     @property
     def seconds(self):
         """
-        Returns the seconds portion of the possession time.
+        The seconds portion of the possession time.
         e.g., `0:59` would be `59` seconds and `4:01` would be `1`
         second.
+        `0` is returned if this is not a valid possession time.
         """
         return (self.__seconds % 60) if self.valid else 0
 
@@ -550,10 +698,14 @@ class PossessionTime (object):
             return '%02d:%02d' % (self.minutes, self.seconds)
 
     def __lt__(self, other):
+        if self.__class__ is not other.__class__:
+            return NotImplemented
         assert self.valid and other.valid
         return self.__seconds < other.__seconds
 
     def __eq__(self, other):
+        if self.__class__ is not other.__class__:
+            return NotImplemented
         return self.__seconds == other.__seconds
 
     def __conform__(self, proto):
@@ -565,6 +717,7 @@ class PossessionTime (object):
         return None
 
 
+@_total_ordering
 class Clock (object):
     """
     Represents a single point in time during a game. This includes the
@@ -575,6 +728,9 @@ class Clock (object):
     Note that the clock time does not uniquely identify a play, since
     not all plays consume time on the clock. (e.g., A two point
     conversion.)
+
+    This class defines a total ordering on clock times. Namely, c1 < c2
+    if and only if c2 is closer to the end of the game than c1.
     """
 
     _nonqs = (Enums.game_phase.Pregame, Enums.game_phase.Half,
@@ -590,6 +746,13 @@ class Clock (object):
 
     @staticmethod
     def from_str(phase, clock):
+        """
+        Introduces a new `nfldb.Clock` object given strings of the game
+        phase and the clock. `phase` may be one of the values in the
+        `nfldb.Enums.game_phase` enumeration. `clock` must be a clock
+        string in the format `MM:SS`, e.g., `4:01` corresponds to a
+        game phase with 4 minutes and 1 second remaining.
+        """
         assert getattr(Enums.game_phase, phase, None) is not None, \
             '"%s" is not a valid game phase. choose one of %s' \
             % (phase, map(str, Enums.game_phase))
@@ -663,9 +826,13 @@ class Clock (object):
             return '%s %02d:%02d' % (phase.name, self.minutes, self.seconds)
 
     def __lt__(self, o):
+        if self.__class__ is not o.__class__:
+            return NotImplemented
         return (self.phase, self.elapsed) < (o.phase, o.elapsed)
 
     def __eq__(self, o):
+        if self.__class__ is not o.__class__:
+            return NotImplemented
         return self.phase == o.phase and self.elapsed == o.elapsed
 
     def __conform__(self, proto):
@@ -675,41 +842,17 @@ class Clock (object):
         return None
 
 
-# We've got to put the stat category stuff because we need the
-# Enums class defined. But `Play` and `PlayPlayer` need these
-# categories to fill in __slots__ in their definition too. Ugly.
-stat_categories = _stat_categories()
-__pdoc__['stat_categories'] = """
-An ordered dictionary of every statistical category available for
-play-by-play data. The keys are the category identifier (e.g.,
-`passing_yds`) and the values are `nfldb.Category` objects.
-"""
-
-_play_categories = OrderedDict(
-    [(n, c) for n, c in stat_categories.items()
-     if c.category_type is Enums.category_scope.play])
-_player_categories = OrderedDict(
-    [(n, c) for n, c in stat_categories.items()
-     if c.category_type is Enums.category_scope.player])
-
-# Let's be awesome and add auto docs.
-for cat in _play_categories.values():
-    __pdoc__['Play.%s' % cat.category_id] = cat.description
-for cat in _player_categories.values():
-    __pdoc__['PlayPlayer.%s' % cat.category_id] = cat.description
-
-
 class Player (object):
     """
     A representation of an NFL player. Note that the representation
     is inherently ephemeral; it always corresponds to the most recent
     knowledge about a player.
 
-    Note that most of the fields in this object can have a `None`
-    value. This is because the source JSON data only guarantees that
-    a GSIS identifier and abbreviated name will be available. The rest
-    of the player meta data is scraped from NFL.com's team roster
-    pages (which invites infrequent uncertainty).
+    Most of the fields in this object can have a `None` value. This is
+    because the source JSON data only guarantees that a GSIS identifier
+    and abbreviated name will be available. The rest of the player meta
+    data is scraped from NFL.com's team roster pages (which invites
+    infrequent uncertainty).
     """
     _table = 'player'
 
@@ -788,6 +931,10 @@ class Player (object):
 
     @staticmethod
     def from_row(db, r):
+        """
+        Introduces a `nfldb.Player` object from a full SQL row from the
+        `player` table.
+        """
         return Player(db, r['player_id'], r['gsis_name'], r['full_name'],
                       r['first_name'], r['last_name'], r['team'],
                       r['position'], r['profile_id'], r['profile_url'],
@@ -799,6 +946,7 @@ class Player (object):
         """
         Given a player GSIS identifier (e.g., `00-0019596`) as a string,
         returns a `nfldb.Player` object corresponding to `player_id`.
+        This function will always execute a single SQL query.
 
         If no corresponding player is found, `None` is returned.
         """
@@ -823,6 +971,12 @@ class Player (object):
         person. Namely, this object is not responsible for containing
         statistical data related to a player at some particular point
         in time.
+
+        This constructor should probably not be used. Instead,
+        use the more convenient constructors `Player.from_row` or
+        `Player.from_id`. Alternatively, a `nfldb.Player` object can be
+        obtained from the `nfldb.PlayPlayer`.`nfldb.PlayPlayer.player`
+        attribute.
         """
         self._db = db
 
@@ -900,23 +1054,47 @@ class Player (object):
             name = self.player_id  # Yikes.
         return '%s (%s, %s)' % (name, self.team, self.position)
 
-    def __eq__(self, other):
-        return self.player_id == other.player_id
-
     def __lt__(self, other):
+        if self.__class__ is not other.__class__:
+            return NotImplemented
         if self.full_name and other.full_name:
             return self.full_name < other.full_name
         return self.gsis_name < other.gsis_name
 
+    def __eq__(self, other):
+        if self.__class__ is not other.__class__:
+            return NotImplemented
+        return self.player_id == other.player_id
+
 
 class PlayPlayer (object):
+    """
+    A "play player" is a statistical grouping of categories for a
+    single player inside a play. For example, passing the ball to
+    a receiver necessarily requires two "play players": the pass
+    (by player X) and the reception (by player Y). Statistics that
+    aren't included, for example, are blocks and penalties. (Although
+    penalty information can be gleaned from a play's free-form
+    `nfldb.Play.description` attribute.)
+
+    Each `nfldb.PlayPlayer` object belongs to exactly one
+    `nfldb.Play` and exactly one `nfldb.Player`.
+
+    Any statistical categories not relevant to this particular play
+    and player default to `0`.
+
+    Most of the statistical fields are documented on the
+    [statistical categories](http://goo.gl/wZstcY)
+    wiki page. Each statistical field is an instance attribute in
+    this class.
+    """
     _table = 'play_player'
 
     _sql_columns = (['gsis_id', 'drive_id', 'play_id', 'player_id', 'team']
                     + _player_categories.keys()
                     )
 
-    _sql_derived = ['offense_yds', 'offense_tds']
+    _sql_derived = ['offense_yds', 'offense_tds', 'defense_tds']
 
     # Define various additive combinations of fields.
     # Abuse the additive identity.
@@ -934,7 +1112,10 @@ class PlayPlayer (object):
     __slots__ = _sql_fields + ['_db', '_play', '_player']
 
     # Document instance variables for derived SQL fields.
-    __pdoc__['PlayPlayer.offense_yds'] = \
+    # We hide them from the public interface, but make the doco
+    # available to nfldb-mk-stat-table. Evil!
+    __pdoc__['PlayPlayer.offense_yds'] = None
+    __pdoc__['_PlayPlayer.offense_yds'] = \
         '''
         Corresponds to any yardage that is manufactured by the offense.
         Namely, the following fields:
@@ -946,11 +1127,14 @@ class PlayPlayer (object):
         This field is useful when searching for plays by net yardage
         regardless of how the yards were obtained.
         '''
-    __pdoc__['PlayPlayer.offense_tds'] = \
+    __pdoc__['PlayPlayer.offense_tds'] = None
+    __pdoc__['_PlayPlayer.offense_tds'] = \
         '''
-        Corresponds to any touchdown manufactured by the offense.
+        Corresponds to any touchdown manufactured by the offense via
+        a passing, reception, rush or fumble recovery.
         '''
-    __pdoc__['PlayPlayer.defense_tds'] = \
+    __pdoc__['PlayPlayer.defense_tds'] = None
+    __pdoc__['_PlayPlayer.defense_tds'] = \
         '''
         Corresponds to any touchdown manufactured by the defense.
         e.g., a pick-6, fumble recovery TD, punt/FG block TD, etc.
@@ -987,6 +1171,13 @@ class PlayPlayer (object):
 
     @staticmethod
     def _from_tuple(db, t):
+        """
+        Introduces a new `nfldb.PlayPlayer` object from a tuple SQL
+        result. This constructor exists for performance reasons and
+        is only used inside the `nfldb.Query` class. In particular,
+        the order of the fields in the originating SELECT query is
+        significant.
+        """
         cols = PlayPlayer._sql_fields
         stats = {}
         for i, v in enumerate(t[5:], 5):
@@ -996,23 +1187,27 @@ class PlayPlayer (object):
 
     @staticmethod
     def from_row(db, row):
+        """
+        Introduces a new `nfldb.PlayPlayer` object from a full SQL row
+        result from the `play_player` table.
+        """
         return PlayPlayer(db, row['gsis_id'], row['drive_id'],
                           row['play_id'], row['player_id'], row['team'], row)
 
     def __init__(self, db, gsis_id, drive_id, play_id, player_id, team,
                  stats):
         """
-        Introduces a new `nfldb.PlayPlayer` object. A "play player"
-        is a statistical grouping of categories for a single player
-        inside a play. For example, passing the ball to a receiver
-        necessarily requires two "play players": the pass (by player
-        X) and the reception (by player Y). Statistics that aren't
-        included, for example, are blocks and penalties. (Although
-        penalty information can be gleaned from a play's free-form
-        `nfldb.Play.description` attribute.)
+        Introduces a new `nfldb.PlayPlayer` object with the given
+        attributes. `stats` should eb a dictionary mapping player
+        statistical categories in `nfldb.stat_categories` to their
+        corresponding values.
 
-        Each `nfldb.PlayPlayer` object belongs to exactly one
-        `nfldb.Play` and exactly one `nfldb.Player`.
+        This constructor should probably not be used. Instead, use
+        `nfldb.PlayPlayer.from_row`, or more conveniently, any of
+        the following `play_players` attributes:
+        `nfldb.Game`.`nfldb.Game.play_players`,
+        `nfldb.Drive`.`nfldb.Drive.play_players` or
+        `nfldb.Play`.`nfldb.Play.play_players`.
         """
         self._play = None
         self._player = None
@@ -1031,9 +1226,8 @@ class PlayPlayer (object):
         self.play_id = play_id
         """
         The numeric play identifier for this "play player". It can
-        typically be interpreted as a sequence number scoped to the
-        week that this game was played, but it's unfortunately not
-        completely consistent.
+        typically be interpreted as a sequence number scoped to its
+        corresponding game.
         """
         self.player_id = player_id
         """
@@ -1055,7 +1249,7 @@ class PlayPlayer (object):
     @property
     def play(self):
         """
-        Returns the `nfldb.Play` object that this "play player" belongs
+        The `nfldb.Play` object that this "play player" belongs
         to. The play is retrieved from the database if necessary.
         """
         if self._play is None:
@@ -1066,7 +1260,7 @@ class PlayPlayer (object):
     @property
     def player(self):
         """
-        Returns the `nfldb.Player` object that this "play player"
+        The `nfldb.Player` object that this "play player"
         corresponds to. The player is retrieved from the database if
         necessary.
         """
@@ -1092,6 +1286,10 @@ class PlayPlayer (object):
 
         Both `self` and `b` must refer to the same player, or else an
         assertion error is raised.
+
+        The `nfldb.aggregate` function should be used to sum collections
+        of `nfldb.PlayPlayer` objects (or objects that can provide
+        `nfldb.PlayPlayer` objects).
         """
         a = self
         assert a.player_id == b.player_id
@@ -1141,6 +1339,40 @@ class PlayPlayer (object):
 
 
 class Play (object):
+    """
+    Represents a single play in an NFL game. Each play has an
+    assortment of meta data, possibly including the time on the clock
+    in which the ball was snapped, the starting field position, the
+    down, yards to go, etc. Not all plays have values for each field
+    (for example, a timeout is considered a play but has no data for
+    `nfldb.Play.down` or `nfldb.Play.yardline`).
+
+    In addition to meta data describing the context of the game at the time
+    the ball was snapped, plays also have statistics corresponding to the
+    fields in `nfldb.stat_categories` with a `nfldb.Category.category_type`
+    of `play`. For example, `third_down_att`, `fourth_down_failed` and
+    `fourth_down_conv`. While the binary nature of these fields suggest
+    a boolean value, they are actually integers. This makes them amenable
+    to aggregation.
+
+    Plays are also associated with player statistics or "events" that
+    occurred in a play. For example, in a single play one player could
+    pass the ball to another player. This is recorded as two different
+    player statistics: a pass and a reception. Each one is represented
+    as a `nfldb.PlayPlayer` object. Plays may have **zero or more** of
+    these player statistics.
+
+    Finally, it is important to note that there are (currently) some
+    useful statistics missing. For example, there is currently no
+    reliable means of determining the time on the clock when the play
+    finished.  Also, there is no field describing the field position at
+    the end of the play, although this may be added in the future.
+
+    Most of the statistical fields are documented on the
+    [statistical categories](http://goo.gl/YY587P)
+    wiki page. Each statistical field is an instance attribute in
+    this class.
+    """
     _table = 'play'
 
     _sql_columns = (['gsis_id', 'drive_id', 'play_id', 'time', 'pos_team',
@@ -1194,6 +1426,13 @@ class Play (object):
 
     @staticmethod
     def _from_tuple(db, t):
+        """
+        Introduces a new `nfldb.Play` object from a tuple SQL
+        result. This constructor exists for performance reasons and
+        is only used inside the `nfldb.Query` class. In particular,
+        the order of the fields in the originating SELECT query is
+        significant.
+        """
         cols = Play._sql_fields
         stats = {}
         for i, v in enumerate(t[12:], 12):
@@ -1204,6 +1443,10 @@ class Play (object):
 
     @staticmethod
     def from_row(db, row):
+        """
+        Introduces a new `nfldb.Play` object from a full SQL row result
+        from the `play` table.
+        """
         stats = {}
         get = row.get
         for cat in _play_categories:
@@ -1238,14 +1481,16 @@ class Play (object):
                  time_inserted, time_updated, stats):
         """
         Introduces a new `nfldb.Play` object with the given
-        attributes. Note that `drive` must be a `nfldb.Drive` object or
-        `None`. When it's `None`, the `nfldb.Play.drive` property will
-        be populated on demand from the database.
+        attributes.
 
         `stats` should be a dictionary of statistical play categories
-        from `nfldb.stat_categories`. The dictionary may contain other
-        keys; they won't be used. (i.e., You may pass a psycopg2 result
-        dictionary constructed from a table row.)
+        from `nfldb.stat_categories`.
+
+        This constructor should probably not be used. Instead, use
+        `nfldb.Play.from_row` or `nfldb.Play.from_id`. Alternatively,
+        the `nfldb.Game`.`nfldb.Game.plays` and
+        `nfldb.Drive`.`nfldb.Drive.plays` attributes can be used to get
+        plays in a game or a drive, respectively.
         """
         self._drive = None
         self._play_players = None
@@ -1304,7 +1549,13 @@ class Play (object):
         used for.
         """
         self.time_inserted = time_inserted
-        """The date and time that this play was added."""
+        """
+        The date and time that this play was added to the
+        database. This can be very useful when sorting plays by the
+        order in which they occurred in real time. Unfortunately, such
+        a sort requires that play data is updated relatively close to
+        when it actually occurred.
+        """
         self.time_updated = time_updated
         """The date and time that this play was last updated."""
 
@@ -1315,8 +1566,8 @@ class Play (object):
     @property
     def drive(self):
         """
-        Returns the `nfldb.Drive` object that contains this play. The
-        drive is retrieved from the database if it hasn't been already.
+        The `nfldb.Drive` object that contains this play. The drive is
+        retrieved from the database if it hasn't been already.
         """
         if self._drive is None:
             self._drive = Drive.from_id(self._db, self.gsis_id, self.drive_id)
@@ -1325,9 +1576,9 @@ class Play (object):
     @property
     def play_players(self):
         """
-        Returns a list of all `nfldb.PlayPlayer`s in this play. They
-        are automatically retrieved from the database if they haven't
-        been already.
+        A list of all `nfldb.PlayPlayer`s in this play. They are
+        automatically retrieved from the database if they haven't been
+        already.
 
         If there are no players attached to this play, then an empty
         list is returned.
@@ -1390,6 +1641,16 @@ class Play (object):
 
 
 class Drive (object):
+    """
+    Represents a single drive in an NFL game. Each drive has an
+    assortment of meta data, possibly including the start and end
+    times, the start and end field positions, the result of the drive,
+    the number of penalties and first downs, and more.
+
+    Each drive corresponds to **zero or more** plays. A drive usually
+    corresponds to at least one play, but if the game is active, there
+    exist valid ephemeral states where a drive has no plays.
+    """
     _table = 'drive'
 
     _sql_columns = ['gsis_id', 'drive_id', 'start_field', 'start_time',
@@ -1451,6 +1712,10 @@ class Drive (object):
 
     @staticmethod
     def from_row(db, r):
+        """
+        Introduces a new `nfldb.Drive` object from a full SQL row
+        result from the `drive` table.
+        """
         return Drive(db, r['gsis_id'], r['drive_id'], r['start_field'],
                      r['start_time'], r['end_field'], r['end_time'],
                      r['pos_team'], r['pos_time'], r['first_downs'],
@@ -1462,7 +1727,7 @@ class Drive (object):
         """
         Given a GSIS identifier (e.g., `2012090500`) as a string
         and a integer drive id, this returns a `nfldb.Drive` object
-        corresponding to given identifiers.
+        corresponding to the given identifiers.
 
         If no corresponding drive is found, then `None` is returned.
         """
@@ -1480,9 +1745,11 @@ class Drive (object):
                  time_inserted, time_updated):
         """
         Introduces a new `nfldb.Drive` object with the given attributes.
-        Note that `game` must be a `nfldb.Game` object, or it may be
-        `None`. When it's `None`, then `nfldb.Drive.game` will fetch
-        game information on demand.
+
+        This constructor should probably not be used. Instead, use
+        `nfldb.Drive.from_row` or `nfldb.Drive.from_id`. Alternatively,
+        the `nfldb.Game`.`nfldb.Game.drives` attribute contains all
+        drives in the corresponding game.
         """
         self._game = None
         self._plays = None
@@ -1552,9 +1819,9 @@ class Drive (object):
         drive.
         """
         self.time_inserted = time_inserted
-        """The date and time that this play was added."""
+        """The date and time that this drive was added."""
         self.time_updated = time_updated
-        """The date and time that this play was last updated."""
+        """The date and time that this drive was last updated."""
 
     @property
     def game(self):
@@ -1569,12 +1836,12 @@ class Drive (object):
     @property
     def plays(self):
         """
-        Returns a list of all `nfldb.Play`s in this drive. They are
+        A list of all `nfldb.Play`s in this drive. They are
         automatically retrieved from the database if they haven't been
         already.
 
-        If there are no plays in the drive (wtf?), then an empty list
-        is returned.
+        If there are no plays in the drive, then an empty list is
+        returned.
         """
         if self._plays is None:
             self._plays = []
@@ -1588,6 +1855,18 @@ class Drive (object):
                     p._drive = self
                     self._plays.append(p)
         return self._plays
+
+    @property
+    def play_players(self):
+        """
+        A list of `nfldb.PlayPlayer` objects in this drive. Data is
+        retrieved from the database if it hasn't been already.
+        """
+        pps = []
+        for play in self.plays:
+            for pp in play.play_players:
+                pps.append(pp)
+        return pps
 
     @property
     def _row(self):
@@ -1615,6 +1894,16 @@ class Drive (object):
 
 
 class Game (object):
+    """
+    Represents a single NFL game in the preseason, regular season or
+    post season. Each game has an assortment of meta data, including
+    a quarterly breakdown of scores, turnovers, the time the game
+    started, the season week the game occurred in, and more.
+
+    Each game corresponds to **zero or more** drive. A game usually
+    corresponds to at least one drive, but if the game is active, there
+    exist valid ephemeral states where a game has no drives.
+    """
     _table = 'game'
 
     _sql_columns = ['gsis_id', 'gamekey', 'start_time', 'week', 'day_of_week',
@@ -1721,6 +2010,10 @@ class Game (object):
 
     @staticmethod
     def from_row(db, row):
+        """
+        Introduces a new `nfldb.Game` object from a full SQL row
+        result from the `game` table.
+        """
         return Game(db, **row)
 
     @staticmethod
@@ -1747,9 +2040,10 @@ class Game (object):
                  away_score_q3, away_score_q4, away_score_q5, away_turnovers,
                  time_inserted, time_updated, loser=None, winner=None):
         """
-        A basic constructor for making a `nfldb.Game` object. It is
-        advisable to use one of the `nfldb.Game.from_` methods to
-        introduce a new `nfldb.Game` object.
+        Introduces a new `nfldb.Drive` object with the given attributes.
+
+        This constructor should probably not be used. Instead, use
+        `nfldb.Game.from_row` or `nfldb.Game.from_id`.
         """
         self._drives = None
 
@@ -1844,16 +2138,15 @@ class Game (object):
         self.away_turnovers = away_turnovers
         """Total turnovers for the away team."""
         self.time_inserted = time_inserted
-        """The date and time that this play was added."""
+        """The date and time that this game was added."""
         self.time_updated = time_updated
-        """The date and time that this play was last updated."""
+        """The date and time that this game was last updated."""
 
     @property
     def drives(self):
         """
-        Returns a list of `nfldb.Drive`s for this game. They are
-        automatically loaded from the database if they haven't been
-        already.
+        A list of `nfldb.Drive`s for this game. They are automatically
+        loaded from the database if they haven't been already.
 
         If there are no drives found in the game, then an empty list
         is returned.
@@ -1873,7 +2166,8 @@ class Game (object):
     @property
     def plays(self):
         """
-        Returns a list of `nfldb.Play` objects in this game.
+        A list of `nfldb.Play` objects in this game. Data is retrieved
+        from the database if it hasn't been already.
         """
         plays = []
         for drive in self.drives:
@@ -1882,23 +2176,32 @@ class Game (object):
         return plays
 
     @property
+    def play_players(self):
+        """
+        A list of `nfldb.PlayPlayer` objects in this game. Data is
+        retrieved from the database if it hasn't been already.
+        """
+        pps = []
+        for play in self.plays:
+            for pp in play.play_players:
+                pps.append(pp)
+        return pps
+
+    @property
     def players(self):
         """
-        Returns a list of tuples. The first element is the team the
-        player was on during the game and the second element is a
+        A list of tuples of player data. The first element is the team
+        the player was on during the game and the second element is a
         `nfldb.Player` object corresponding to that player's meta data
-        (including the team he's currently on).
-        The list is returned without duplicates and sorted by team and
-        player name.
+        (including the team he's currently on). The list is returned
+        without duplicates and sorted by team and player name.
         """
         pset = set()
         players = []
-        for drive in self.drives:
-            for play in drive.plays:
-                for pp in play.play_players:
-                    if pp.player_id not in pset:
-                        players.append((pp.team, pp.player))
-                        pset.add(pp.player_id)
+        for pp in self.play_players:
+            if pp.player_id not in pset:
+                players.append((pp.team, pp.player))
+                pset.add(pp.player_id)
         return sorted(players)
 
     @property

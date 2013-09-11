@@ -41,9 +41,9 @@ teams = [
 
 def standard_team(team):
     """
-    Returns a standard abbreviation when team corresponds to a team in
-    nfldb.team.teams (case insensitive). All known variants of a team
-    name are searched. If no team is found, "UNK" is returned.
+    Returns a standard abbreviation when team corresponds to a team
+    known by nfldb (case insensitive). If no team can be found, then
+    `"UNK"` is returned.
     """
     if not team:
         return 'UNK'
