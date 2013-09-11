@@ -81,6 +81,9 @@ Here's a condensed version that excludes play and player statistics:
 There is also a [full PDF version](http://burntsushi.net/stuff/nfldb/nfldb.pdf)
 that includes every column in the database.
 
+The nfldb wiki has a [description of the data 
+model](https://github.com/BurntSushi/nfldb/wiki/The-data-model).
+
 The most recent version of the nfldb PostgreSQL database is available here:
 [http://burntsushi.net/stuff/nfldb/nfldb.sql.zip](http://burntsushi.net/stuff/nfldb/nfldb.sql.zip).
 
