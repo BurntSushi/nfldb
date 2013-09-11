@@ -26,6 +26,10 @@ __pdoc__['api_version'] = \
     anything else.
     """
 
+_config_home = os.getenv('XDG_CONFIG_HOME')
+if not _config_home:
+    _config_home = path.join(os.getenv('HOME'), '.config')
+
 
 def config(config_path=''):
     """
@@ -45,7 +49,7 @@ def config(config_path=''):
     paths = [
         config_path,
         path.join(sys.prefix, 'share', 'nfldb', 'config.ini'),
-        path.join(os.getenv('XDG_CONFIG_HOME'), 'nfldb', 'config.ini'),
+        path.join(_config_home, 'nfldb', 'config.ini'),
     ]
     cp = ConfigParser.RawConfigParser()
     for p in paths:
