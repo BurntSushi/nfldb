@@ -1,7 +1,0 @@
-#!/bin/sh
-
-rm -rf docs/*
-epydoc -v --html --name nfldb \
-  --no-private \
-  -o ./doc/ nfldb/__init__.py
-
