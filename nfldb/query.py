@@ -989,6 +989,23 @@ class Query (Condition):
             tabs = tabs.union(cond._tables())
         return tabs
 
+    def show_where(self, aggregate=False):
+        """
+        Returns an approximate WHERE clause corresponding to the
+        criteria specified in `self`. Note that the WHERE clause given
+        is never explicitly used for performance reasons, but one hopes
+        that it describes the criteria in `self`.
+
+        If `aggregate` is `True`, then aggregate criteria for the
+        `play` and `play_player` tables is shown with aggregate
+        functions applied.
+        """
+        # Return criteria for all tables.
+        tables = ['game', 'drive', 'play', 'play_player', 'player']
+        with Tx(self._db) as cur:
+            return self._sql_where(cur, tables, aggregate=aggregate)
+        return ''
+
     def _sql_where(self, cur, tables, prefix=None, aggregate=False):
         """
         Returns a WHERE expression representing the search criteria
