@@ -4,7 +4,7 @@ all:
 	@echo "Specify a target."
 
 pypi: docs er sql longdesc.rst
-	sudo python2 setup.py register sdist upload
+	sudo python2 setup.py register sdist bdist_wininst upload
 
 docs: er
 	pdoc --html --html-dir ./doc --overwrite ./nfldb
