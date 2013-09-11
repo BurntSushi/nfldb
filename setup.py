@@ -3,6 +3,17 @@ from distutils.core import setup
 from glob import glob
 import os.path as path
 
+# Snippet taken from - http://goo.gl/BnjFzw
+# It's to fix a bug for generating a Windows distribution on Linux systems.
+# Linux doesn't have access to the "mbcs" encoding.
+try:
+    codecs.lookup('mbcs')
+except LookupError:
+    ascii = codecs.lookup('ascii')
+    def wrapper(name, enc=ascii):
+        return {True: enc}.get(name == 'mbcs')
+    codecs.register(wrapper)
+
 install_requires = ['nflgame', 'psycopg2', 'enum34']
 try:
     import argparse
