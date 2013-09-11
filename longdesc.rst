@@ -17,8 +17,10 @@ interface <http://goo.gl/Sd6MN2>`__ to search NFL play data.
 
 The database can be updated with real time data from active games by
 running the ``nfldb-update`` script included with this module as often
-as you like. Roster updates are done automatically at a minimum interval
-of 12 hours.
+as you're comfortable pinging NFL.com. (N.B. The JSON data itself only
+updates every 15 seconds, so running ``nfldb-update`` faster than that
+would be wasteful.) Roster updates are done automatically at a minimum
+interval of 12 hours.
 
 nfldb has `comprehensive API
 documentation <http://pdoc.burntsushi.net/nfldb>`__ and a `wiki with
