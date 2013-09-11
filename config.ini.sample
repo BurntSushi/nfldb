@@ -4,6 +4,22 @@
 # 
 #     select * from pg_timezone_names
 #
+# Here are some common ones:
+#
+#    US/Alaska
+#    US/Samoa
+#    US/Hawaii
+#    US/Mountain
+#    US/Indiana-Starke
+#    US/Pacific
+#    US/Central
+#    US/Michigan
+#    US/Aleutian
+#    US/East-Indiana
+#    US/Arizona
+#    US/Eastern
+#    US/Pacific-New
+#
 # Datetimes are always stored as UTC, but this time zone setting
 # can be used to change how datetimes are returned in SELECT queries.
 timezone = US/Eastern
