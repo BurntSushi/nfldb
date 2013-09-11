@@ -38,7 +38,13 @@ Matt Ryan (ATL, QB) 4719
 ```
 
 
-### Getting help
+### Documentation and getting help
+
+nfldb has
+[comprehensive API documentation](http://pdoc.burntsushi.net/nfldb). 
+[nfldb also has a wiki](https://github.com/BurntSushi/nfldb/wiki)
+with articles written as tutorials, along with a ton of examples and a 
+description of the data model.
 
 If you need any help or have found a bug, please
 [open a new issue on nfldb's issue 
