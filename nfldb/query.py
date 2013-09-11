@@ -419,8 +419,8 @@ class Query (Condition):
             print game
 
     This is only the beginning of what can be done. More examples that run
-    the gamut can be found on nfldb's wiki page for
-    [searching with the query interface](http://goo.gl/za3xdu).
+    the gamut can be found on
+    [nfldb's wiki](https://github.com/BurntSushi/nfldb/wiki).
     """
 
     def __init__(self, db, orelse=False):
