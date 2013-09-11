@@ -62,7 +62,7 @@ setup(
     data_files=[('share/doc/nfldb', ['README.md', 'longdesc.rst',
                                      'COPYING', 'INSTALL']),
                 ('share/doc/nfldb/doc', docfiles),
-                ('share/nfldb', ['config.ini'])],
+                ('share/nfldb', ['config.ini.sample'])],
     install_requires=install_requires,
     scripts=['scripts/nfldb-update']
 )
