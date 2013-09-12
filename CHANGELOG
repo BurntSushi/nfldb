@@ -1,3 +1,9 @@
+0.0.3
+=====
+  - Tons of documentation.
+  - Added pytz as an explicit dependency.
+  - Added a `show_where` method to the Query class for debugging search logic.
+
 0.0.2
 =====
   - Be a bit smarter with configuration files.
