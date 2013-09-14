@@ -3,6 +3,7 @@
 from __future__ import absolute_import, division, print_function
 import argparse
 from collections import defaultdict
+import datetime
 import subprocess
 import sys
 import time
@@ -24,6 +25,10 @@ def log(*args, **kwargs):
     kwargs['file'] = sys.stderr
     print(*args, **kwargs)
     sys.stderr.flush()
+
+
+def now():
+    return datetime.datetime.now()
 
 
 def game_from_id(cursor, gsis_id):
@@ -352,7 +357,7 @@ if __name__ == '__main__':
 
     def doit():
         log('-' * 79)
-        log('STARTING NFLDB UPDATE AT %s' % nfldb.now())
+        log('STARTING NFLDB UPDATE AT %s' % now())
 
         log('Connecting to nfldb... ', end='')
         db = nfldb.connect()
@@ -365,7 +370,7 @@ if __name__ == '__main__':
 
         update(db, player_interval=args.player_interval)
 
-        log('FINISHED NFLDB UPDATE AT %s' % nfldb.now())
+        log('FINISHED NFLDB UPDATE AT %s' % now())
         log('-' * 79)
 
     if args.interval is None:
