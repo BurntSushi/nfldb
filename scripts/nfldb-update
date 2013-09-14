@@ -5,6 +5,7 @@ import argparse
 from collections import defaultdict
 import subprocess
 import sys
+import time
 
 import nfldb
 
@@ -283,8 +284,6 @@ def update(db, player_interval=(60 * 60 * 12)):
     # Comparatively, updating players is pretty simple. Player meta data
     # changes infrequently, which means we can update it on a larger interval
     # and we can be less careful about performance.
-    log('-' * 79)
-    log('STARTING NFLDB UPDATE AT %s' % nfldb.now())
 
     with nfldb.Tx(db) as cursor:
         # Try to update players first to avoid upserting them.
@@ -330,9 +329,6 @@ def update(db, player_interval=(60 * 60 * 12)):
                 g._save(cursor)
             log('done.')
 
-        log('FINISHED NFLDB UPDATE AT %s' % nfldb.now())
-        log('-' * 79)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -341,6 +337,12 @@ if __name__ == '__main__':
                     '--background.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     aa = parser.add_argument
+    aa('--interval', type=int, default=None,
+       help='When set, nfldb-update will check for active games and update '
+            'the database every N seconds, where N is the interval given. '
+            'You should NOT specify an interval smaller than 15 seconds, '
+            'since NFL.com\'s JSON feed is updated approximately every '
+            '15 seconds.')
     aa('--player-interval', type=int, default=(60 * 60 * 12),
        help='The number of seconds between player meta data updates. A longer '
             'interval is needed since meta data does not change frequently '
@@ -348,13 +350,31 @@ if __name__ == '__main__':
             'NFL.com.')
     args = parser.parse_args()
 
-    log('Connecting to nfldb... ', end='')
-    db = nfldb.connect()
-    log('done.')
+    def doit():
+        log('-' * 79)
+        log('STARTING NFLDB UPDATE AT %s' % nfldb.now())
 
-    # We always insert dates and times as UTC.
-    log('Setting timezone to UTC... ', end='')
-    nfldb.set_timezone(db, 'UTC')
-    log('done.')
+        log('Connecting to nfldb... ', end='')
+        db = nfldb.connect()
+        log('done.')
 
-    update(db, player_interval=args.player_interval)
+        # We always insert dates and times as UTC.
+        log('Setting timezone to UTC... ', end='')
+        nfldb.set_timezone(db, 'UTC')
+        log('done.')
+
+        update(db, player_interval=args.player_interval)
+
+        log('FINISHED NFLDB UPDATE AT %s' % nfldb.now())
+        log('-' * 79)
+
+    if args.interval is None:
+        doit()
+    else:
+        if args.interval < 15:
+            log('WARNING: Interval %d is shorter than 15 seconds and is '
+                'probably wasteful.\nAre you sure you know what you are doing?'
+                % args.interval)
+        while True:
+            doit()
+            time.sleep(args.interval)
