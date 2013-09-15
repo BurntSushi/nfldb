@@ -571,7 +571,7 @@ class FieldPosition (object):
         assert -50 <= offset <= 50
         self._offset = offset
 
-    def add_yards(self, yards):
+    def _add_yards(self, yards):
         """
         Returns a new `nfldb.FieldPosition` with `yards` added to this
         field position. The value of `yards` may be negative.
@@ -590,6 +590,14 @@ class FieldPosition (object):
         positions.
         """
         return self._offset is not None
+
+    def __add__(self, other):
+        if isinstance(other, FieldPosition):
+            toadd = other._offset
+        else:
+            toadd = other
+        newoffset = max(-50, min(50, self._offset + toadd))
+        return FieldPosition(newoffset)
 
     def __lt__(self, other):
         if self.__class__ is not other.__class__:
