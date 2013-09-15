@@ -51,7 +51,7 @@ and a [wiki with examples](https://github.com/BurntSushi/nfldb/wiki).
 nfldb can be used in conjunction with
 [nflvid](https://pypi.python.org/pypi/nflvid)
 to
-[search and watch NFL game footage](http://goo.gl/1qSwJw).
+[search and watch NFL game footage](http://goo.gl/Mckaf0).
 
 If you need help, please join us at our IRC channel `#nflgame` on
 FreeNode.
