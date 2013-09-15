@@ -633,7 +633,7 @@ class PossessionTime (object):
     __slots__ = ['__seconds']
 
     @staticmethod
-    def clock(clock_str):
+    def from_str(clock_str):
         """
         Introduces a `nfldb.PossessionTime` object from a string
         formatted as clock time. For example, `2:00` corresponds to
