@@ -271,7 +271,7 @@ class Enums (object):
                        ['Pregame', 'Q1', 'Q2', 'Half',
                         'Q3', 'Q4', 'OT', 'OT2', 'Final'])
     """
-    Represents the phase of the game. e.g., `Q1` or `HALF`.
+    Represents the phase of the game. e.g., `Q1` or `Half`.
     """
 
     season_phase = _Enum('season_phase',
@@ -546,8 +546,11 @@ class FieldPosition (object):
 
         For example, `OPP 19` corresponds to an offset of `31`
         and `OWN 5` corresponds to an offset of `-45`. Midfield can be
-        expressed as either `OWN 0` or `OPP 0`.
+        expressed as either `MIDFIELD`, `OWN 50` or `OPP 50`.
         """
+        if pos.upper() == 'MIDFIELD':
+            return FieldPosition(0)
+
         field, yrdline = pos.split(' ')
         field, yrdline = field.upper(), int(yrdline)
         assert field in ('OWN', 'OPP')
