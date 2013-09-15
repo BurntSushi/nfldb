@@ -65,7 +65,10 @@ def game_from_schedule(cursor, gsis_id):
 def update_season_state(cursor):
     phase_map = nfldb.types.Enums._nflgame_season_phase
 
-    nflgame.live._update_week_number()
+    try:
+        nflgame.live._update_week_number()
+    except:  # Don't let a bad download kill the update script.
+        return
     typ = phase_map[nflgame.live._cur_season_phase]
     cursor.execute('''
         UPDATE meta SET season_type = %s, season_year = %s, week = %s
