@@ -1337,7 +1337,7 @@ class PlayPlayer (object):
     def __getattr__(self, k):
         if k in PlayPlayer.__slots__:
             return 0
-        raise AttributeError
+        raise AttributeError(k)
 
 
 class Play (object):
