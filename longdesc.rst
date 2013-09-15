@@ -25,7 +25,7 @@ And the output is:
 
 ::
 
-    [andrew@Liger ~] python2 top-five.py 
+    [andrew@Liger ~] python2 top-five.py
     Drew Brees (NO, QB) 5177
     Matthew Stafford (DET, QB) 4965
     Tony Romo (DAL, QB) 4903
