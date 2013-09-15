@@ -1902,7 +1902,7 @@ class Game (object):
     a quarterly breakdown of scores, turnovers, the time the game
     started, the season week the game occurred in, and more.
 
-    Each game corresponds to **zero or more** drive. A game usually
+    Each game corresponds to **zero or more** drives. A game usually
     corresponds to at least one drive, but if the game is active, there
     exist valid ephemeral states where a game has no drives.
     """
