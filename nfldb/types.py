@@ -1256,7 +1256,7 @@ class PlayPlayer (object):
         """
         if self._play is None:
             self._play = Play.from_id(self._db, self.gsis_id, self.drive_id,
-                                      self._play_id)
+                                      self.play_id)
         return self._play
 
     @property
