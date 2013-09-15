@@ -28,6 +28,8 @@ def select_columns(tabtype, prefix=None):
     SQL field.
 
     This function includes derived fields in `tabtype`.
+
+    This should only be used if you're writing SQL queries by hand.
     """
     sql = lambda f: tabtype._as_sql(f, prefix=prefix)
     select = [sql(f) for f in tabtype._sql_columns]
