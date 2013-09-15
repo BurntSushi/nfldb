@@ -694,7 +694,7 @@ class Query (Condition):
         q = 'SELECT %s FROM game %s %s'
         with Tx(self._db) as cursor:
             q = q % (
-                types._select_fields(types.Game),
+                types.select_columns(types.Game),
                 _prefix_and(_sql_pkey_in(cursor, ['gsis_id'], ids['game'])),
                 self._sorter.sql(tabtype=types.Game),
             )
@@ -719,7 +719,7 @@ class Query (Condition):
         with Tx(self._db) as cursor:
             pkey = _pk_play(cursor, ids, tables=tables)
             q = q % (
-                types._select_fields(types.Drive),
+                types.select_columns(types.Drive),
                 _prefix_and(pkey),
                 self._sorter.sql(tabtype=types.Drive),
             )
@@ -754,7 +754,7 @@ class Query (Condition):
             pkey = _pk_play(cursor, ids, tables=tables)
 
             q = q % (
-                types._select_fields(types.Play),
+                types.select_columns(types.Play),
                 _prefix_and(pkey),
                 self._sorter.sql(tabtype=types.Play),
             )
@@ -793,7 +793,7 @@ class Query (Condition):
         q = 'SELECT %s FROM play_player %s %s'
         with Tx(self._db, factory=tuple_cursor) as cursor:
             q = q % (
-                types._select_fields(types.PlayPlayer),
+                types.select_columns(types.PlayPlayer),
                 _prefix_and(pkey),
                 self._sorter.sql(tabtype=types.PlayPlayer),
             )
@@ -841,7 +841,7 @@ class Query (Condition):
                 player_pks = _sql_pkey_in(cursor, ['player_id'], ids['player'])
 
             q = q % (
-                types._select_fields(types.PlayPlayer),
+                types.select_columns(types.PlayPlayer),
                 _prefix_and(player_pks, pkey),
                 self._sorter.sql(tabtype=types.PlayPlayer),
             )
@@ -866,7 +866,7 @@ class Query (Condition):
         q = 'SELECT %s FROM player %s %s'
         with Tx(self._db) as cur:
             q = q % (
-                types._select_fields(types.Player),
+                types.select_columns(types.Player),
                 _prefix_and(_sql_pkey_in(cur, ['player_id'], ids['player'])),
                 self._sorter.sql(tabtype=types.Player),
             )
@@ -967,7 +967,7 @@ class Query (Condition):
                 for f in fields:
                     v = row[f]
                     if v != 0:
-                        stats[f] = int(v)
+                        stats[f] = v
                 pp = types.PlayPlayer(self._db, None, None, None,
                                       row['player_id'], None, stats)
                 results.append(pp)

@@ -22,7 +22,7 @@ passers in the 2012 regular season:
 
 And the output is:
 
-    [andrew@Liger ~] python2 top-five.py 
+    [andrew@Liger ~] python2 top-five.py
     Drew Brees (NO, QB) 5177
     Matthew Stafford (DET, QB) 4965
     Tony Romo (DAL, QB) 4903
@@ -65,7 +65,7 @@ from nfldb.query import __pdoc__ as __query_pdoc__
 from nfldb.query import aggregate, current, Query, QueryOR
 from nfldb.team import standard_team
 from nfldb.types import __pdoc__ as __types_pdoc__
-from nfldb.types import stat_categories
+from nfldb.types import select_columns, stat_categories
 from nfldb.types import Category, Clock, Enums, Drive, FieldPosition, Game
 from nfldb.types import Play, Player, PlayPlayer, PossessionTime, Team
 from nfldb.version import __pdoc__ as __version_pdoc__
@@ -90,7 +90,7 @@ __all__ = [
     'standard_team',
 
     # nfldb.types
-    'stat_categories',
+    'select_columns', 'stat_categories',
     'Category', 'Clock', 'Enums', 'Drive', 'FieldPosition', 'Game',
     'Play', 'Player', 'PlayPlayer', 'PossessionTime', 'Team',
 

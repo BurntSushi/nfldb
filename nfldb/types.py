@@ -21,6 +21,20 @@ import nfldb.team
 __pdoc__ = {}
 
 
+def select_columns(tabtype, prefix=None):
+    """
+    Return a valid SQL SELECT string for the given table type. If
+    `prefix` is not `None`, then it will be used as a prefix for each
+    SQL field.
+
+    This function includes derived fields in `tabtype`.
+    """
+    sql = lambda f: tabtype._as_sql(f, prefix=prefix)
+    select = [sql(f) for f in tabtype._sql_columns]
+    select += ['%s AS %s' % (sql(f), f) for f in tabtype._sql_derived]
+    return ', '.join(select)
+
+
 def _stat_categories():
     """
     Returns a `collections.OrderedDict` of all statistical categories
@@ -131,18 +145,6 @@ def _as_row(fields, obj):
     return [(f, getattr(obj, f, None)) for f in fields if f not in exclude]
 
 
-def _select_fields(tabtype, prefix=None):
-    """
-    Return a valid SQL SELECT string for the given table type. If
-    `prefix` is not `None`, then it will be used as a prefix for each
-    SQL field.
-
-    This function includes derived fields in `tabtype`.
-    """
-    sql = lambda f: tabtype._as_sql(f, prefix=prefix)
-    select = [sql(f) for f in tabtype._sql_columns]
-    select += ['%s AS %s' % (sql(f), f) for f in tabtype._sql_derived]
-    return ', '.join(select)
 
 
 def _sum_fields(tabtype, prefix=None):
@@ -953,7 +955,7 @@ class Player (object):
         with Tx(db) as cursor:
             cursor.execute('''
                 SELECT %s FROM player WHERE player_id = %s
-            ''' % (_select_fields(Player), '%s'), (player_id,))
+            ''' % (select_columns(Player), '%s'), (player_id,))
             if cursor.rowcount > 0:
                 return Player.from_row(db, cursor.fetchone())
         return None
@@ -1470,7 +1472,7 @@ class Play (object):
         with Tx(db) as cursor:
             q = '''
                 SELECT %s FROM play WHERE (gsis_id, drive_id, play_id) = %s
-            ''' % (_select_fields(Play), '%s')
+            ''' % (select_columns(Play), '%s')
             cursor.execute(q, ((gsis_id, drive_id, play_id),))
             if cursor.rowcount > 0:
                 return Play.from_row(db, cursor.fetchone())
@@ -1589,7 +1591,7 @@ class Play (object):
                 q = '''
                     SELECT %s FROM play_player
                     WHERE (gsis_id, drive_id, play_id) = %s
-                ''' % (_select_fields(PlayPlayer), '%s')
+                ''' % (select_columns(PlayPlayer), '%s')
                 cursor.execute(
                     q, ((self.gsis_id, self.drive_id, self.play_id),))
                 for row in cursor.fetchall():
@@ -1734,7 +1736,7 @@ class Drive (object):
         with Tx(db) as cursor:
             cursor.execute('''
                 SELECT %s FROM drive WHERE (gsis_id, drive_id) = %s
-            ''' % (_select_fields(Drive), '%s'), ((gsis_id, drive_id),))
+            ''' % (select_columns(Drive), '%s'), ((gsis_id, drive_id),))
             if cursor.rowcount > 0:
                 return Drive.from_row(db, cursor.fetchone())
         return None
@@ -1848,7 +1850,7 @@ class Drive (object):
             with Tx(self._db) as cursor:
                 q = '''
                     SELECT %s FROM play WHERE (gsis_id, drive_id) = %s
-                ''' % (_select_fields(Play), '%s')
+                ''' % (select_columns(Play), '%s')
                 cursor.execute(q, ((self.gsis_id, self.drive_id),))
                 for row in cursor.fetchall():
                     p = Play.from_row(self._db, row)
@@ -2027,7 +2029,8 @@ class Game (object):
         with Tx(db) as cursor:
             cursor.execute('''
                 SELECT %s FROM game WHERE gsis_id = %s
-            ''' % (_select_fields(Game), '%s'), (gsis_id,))
+                ORDER BY gsis_id ASC
+            ''' % (select_columns(Game), '%s'), (gsis_id,))
             if cursor.rowcount > 0:
                 return Game.from_row(db, cursor.fetchone())
         return None
@@ -2156,7 +2159,7 @@ class Game (object):
             with Tx(self._db) as cursor:
                 cursor.execute('''
                     SELECT %s FROM drive WHERE gsis_id = %s
-                ''' % (_select_fields(Drive), '%s'), (self.gsis_id,))
+                ''' % (select_columns(Drive), '%s'), (self.gsis_id,))
                 for row in cursor.fetchall():
                     d = Drive.from_row(self._db, row)
                     d._game = self
