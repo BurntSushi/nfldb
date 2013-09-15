@@ -2176,7 +2176,7 @@ class Game (object):
         """
         plays = []
         for drive in self.drives:
-            for play in self.plays:
+            for play in drive.plays:
                 plays.append(play)
         return plays
 
