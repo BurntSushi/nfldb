@@ -1850,6 +1850,7 @@ class Drive (object):
             with Tx(self._db) as cursor:
                 q = '''
                     SELECT %s FROM play WHERE (gsis_id, drive_id) = %s
+                    ORDER BY time ASC, play_id ASC
                 ''' % (select_columns(Play), '%s')
                 cursor.execute(q, ((self.gsis_id, self.drive_id),))
                 for row in cursor.fetchall():
@@ -2159,6 +2160,7 @@ class Game (object):
             with Tx(self._db) as cursor:
                 cursor.execute('''
                     SELECT %s FROM drive WHERE gsis_id = %s
+                    ORDER BY start_time ASC, drive_id ASC
                 ''' % (select_columns(Drive), '%s'), (self.gsis_id,))
                 for row in cursor.fetchall():
                     d = Drive.from_row(self._db, row)
