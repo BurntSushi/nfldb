@@ -145,8 +145,6 @@ def _as_row(fields, obj):
     return [(f, getattr(obj, f, None)) for f in fields if f not in exclude]
 
 
-
-
 def _sum_fields(tabtype, prefix=None):
     """
     Return a valid SQL SELECT string for an aggregate query. This
