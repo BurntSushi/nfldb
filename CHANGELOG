@@ -1,3 +1,9 @@
+0.0.6
+=====
+  - Fix a bug in nfldb-update where the database wasn't being closed
+    when being run with the `--interval` flag.
+  - Added `player_search` which does fuzzy name matching.
+
 0.0.5
 =====
   - Fixed a broken link in the module/PyPI description.
