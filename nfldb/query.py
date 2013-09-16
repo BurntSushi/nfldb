@@ -82,9 +82,9 @@ def player_search(db, full_name, team=None, position=None, limit=1):
     one given. Similarity is measured by the
     [Levenshtein distance](http://en.wikipedia.org/wiki/Levenshtein_distance).
 
-    Results are returned as tuples. The first element is the
-    Levenshtein distance and the second element is a `nfldb.Player`
-    object.  When `limit` is `1` (the default), then the return value
+    Results are returned as tuples. The first element is the is a
+    `nfldb.Player` object and the second element is the Levenshtein
+    distance. When `limit` is `1` (the default), then the return value
     is a tuple.  When `limit` is more than `1`, then the return value
     is a list of tuples.
 
@@ -103,7 +103,7 @@ def player_search(db, full_name, team=None, position=None, limit=1):
     function must be available. If running this functions gives
     you an error about "No function matches the given name and
     argument types", then you can install the `levenshtein` function
-    into your database by running the SQL query `CREATE EXTENSION 
+    into your database by running the SQL query `CREATE EXTENSION
     fuzzystrmatch` as a superuser like `postgres`. For example:
 
         #!bash
@@ -111,8 +111,9 @@ def player_search(db, full_name, team=None, position=None, limit=1):
     """
     assert isinstance(limit, int) and limit >= 1
 
+    select_leven = 'levenshtein(full_name, %s) AS distance'
     q = '''
-        SELECT %s, levenshtein(full_name, %%s) AS distance
+        SELECT %s, %s
         FROM player
         %s
         ORDER BY distance ASC LIMIT %d
@@ -125,15 +126,17 @@ def player_search(db, full_name, team=None, position=None, limit=1):
         if position is not None:
             qposition = cursor.mogrify('position = %s', (position,))
 
+        select_leven = cursor.mogrify(select_leven, (full_name,))
         q = q % (
             types.select_columns(types.Player),
+            select_leven,
             _prefix_and(qteam, qposition),
             limit
         )
         cursor.execute(q, (full_name,))
 
         for row in cursor.fetchall():
-            results.append((row['distance'], types.Player.from_row(db, row)))
+            results.append((types.Player.from_row(db, row), row['distance']))
     if limit == 1:
         if len(results) == 0:
             return (None, None)
