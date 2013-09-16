@@ -372,7 +372,7 @@ if __name__ == '__main__':
         log('done.')
 
         update(db, player_interval=args.player_interval)
-        
+
         log('Closing database connection... ', end='')
         db.close()
         log('done.')
