@@ -372,6 +372,10 @@ if __name__ == '__main__':
         log('done.')
 
         update(db, player_interval=args.player_interval)
+        
+        log('Closing database connection... ', end='')
+        db.close()
+        log('done.')
 
         log('FINISHED NFLDB UPDATE AT %s' % now())
         log('-' * 79)
