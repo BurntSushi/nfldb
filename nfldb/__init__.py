@@ -62,7 +62,7 @@ from nfldb.db import __pdoc__ as __db_pdoc__
 from nfldb.db import api_version, connect, now, set_timezone, schema_version
 from nfldb.db import Tx
 from nfldb.query import __pdoc__ as __query_pdoc__
-from nfldb.query import aggregate, current, Query, QueryOR
+from nfldb.query import aggregate, current, player_search, Query, QueryOR
 from nfldb.team import standard_team
 from nfldb.types import __pdoc__ as __types_pdoc__
 from nfldb.types import select_columns, stat_categories
@@ -84,7 +84,7 @@ __all__ = [
     'Tx',
 
     # nfldb.query
-    'aggregate', 'current', 'Query', 'QueryOR',
+    'aggregate', 'current', 'player_search', 'Query', 'QueryOR',
 
     # nfldb.team
     'standard_team',

@@ -75,6 +75,72 @@ def current(db):
     return tuple([None] * 3)
 
 
+def player_search(db, full_name, team=None, position=None, limit=1):
+    """
+    Given a database handle and a player's full name, this function
+    searches the database for players with full names *similar* to the
+    one given. Similarity is measured by the
+    [Levenshtein distance](http://en.wikipedia.org/wiki/Levenshtein_distance).
+
+    Results are returned as tuples. The first element is the
+    Levenshtein distance and the second element is a `nfldb.Player`
+    object.  When `limit` is `1` (the default), then the return value
+    is a tuple.  When `limit` is more than `1`, then the return value
+    is a list of tuples.
+
+    If no results are found, then `(None, None)` is returned when
+    `limit == 1` or the empty list is returned when `limit > 1`.
+
+    If `team` is not `None`, then only players **currently** on the
+    team provided will be returned. Any players with an unknown team
+    are therefore omitted.
+
+    If `position` is not `None`, then only players **currently**
+    at that position will be returned. Any players with an unknown
+    position are therefore omitted.
+
+    In order to use this function, the PostgreSQL `levenshtein`
+    function must be available. If running this functions gives
+    you an error about "No function matches the given name and
+    argument types", then you can install the `levenshtein` function
+    into your database by running the SQL query `CREATE EXTENSION 
+    fuzzystrmatch` as a superuser like `postgres`. For example:
+
+        #!bash
+        psql -U postgres -c 'CREATE EXTENSION fuzzystrmatch;' nfldb
+    """
+    assert isinstance(limit, int) and limit >= 1
+
+    q = '''
+        SELECT %s, levenshtein(full_name, %%s) AS distance
+        FROM player
+        %s
+        ORDER BY distance ASC LIMIT %d
+    '''
+    qteam, qposition = '', ''
+    results = []
+    with Tx(db) as cursor:
+        if team is not None:
+            qteam = cursor.mogrify('team = %s', (team,))
+        if position is not None:
+            qposition = cursor.mogrify('position = %s', (position,))
+
+        q = q % (
+            types.select_columns(types.Player),
+            _prefix_and(qteam, qposition),
+            limit
+        )
+        cursor.execute(q, (full_name,))
+
+        for row in cursor.fetchall():
+            results.append((row['distance'], types.Player.from_row(db, row)))
+    if limit == 1:
+        if len(results) == 0:
+            return (None, None)
+        return results[0]
+    return results
+
+
 def _append_conds(conds, tabtype, kwargs):
     """
     Adds `nfldb.Condition` objects to the condition list `conds` for
