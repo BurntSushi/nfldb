@@ -1,3 +1,11 @@
+0.0.7
+=====
+  - Fixed a bug where nfldb crashes if neither `XDG_CONFIG_HOME` or
+    `HOME` are set.
+  - Changed `nfldb-dump` to omit owner information in the SQL dump.
+  - Fixed embarrassing team misspellings.
+  - Made pytz version dependency consistent with nflgame.
+
 0.0.6
 =====
   - Fix a bug in nfldb-update where the database wasn't being closed
