@@ -40,7 +40,7 @@ setup(
     author='Andrew Gallant',
     author_email='nfldb@burntsushi.net',
     version=version,
-    license='WTFPL',
+    license='UNLICENSE',
     description='A library to manage and update NFL data in a relational '
                 'database.',
     long_description=longdesc,
