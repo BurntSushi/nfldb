@@ -28,7 +28,11 @@ __pdoc__['api_version'] = \
 
 _config_home = os.getenv('XDG_CONFIG_HOME')
 if not _config_home:
-    _config_home = path.join(os.getenv('HOME'), '.config')
+    home = os.getenv('HOME')
+    if not home:
+        _config_home = ''
+    else:
+        _config_home = path.join(home, '.config')
 
 
 def config(config_path=''):
