@@ -1,3 +1,7 @@
+0.0.9
+=====
+  - Windows can't handle symlinks in setup.py.
+
 0.0.8
 =====
   - Invoke nflgame-update-players from nfldb-update in a cross platform
