@@ -1,3 +1,9 @@
+0.0.8
+=====
+  - Invoke nflgame-update-players from nfldb-update in a cross platform
+    way. e.g., `python -m nflgame.update_players` instead of
+    `nflgame-update-players`.
+
 0.0.7
 =====
   - Fixed a bug where nfldb crashes if neither `XDG_CONFIG_HOME` or
