@@ -88,7 +88,7 @@ def update_players(cursor, interval):
         return
 
     log('Updating player JSON database... (last update was %s)' % last)
-    cmd = ['nflgame-update-players', '--no-block']
+    cmd = [sys.executable, '-m', 'nflgame.update_players', '--no-block']
     try:
         subprocess.check_call(cmd, stdout=sys.stdout, stderr=sys.stderr)
     except subprocess.CalledProcessError as e:
