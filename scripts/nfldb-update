@@ -142,7 +142,7 @@ def bulk_insert_game_data(cursor, scheduled):
     and plays in the game.
     """
     def do():
-        log('\tSending batch of data to database...')
+        log('\tSending batch of data to database.')
         for table in ('drive', 'play', 'play_player'):  # order matters
             if len(bulk[table]) > 0:
                 nfldb.db._big_insert(cursor, table, bulk[table])
