@@ -1,3 +1,7 @@
+0.0.10
+======
+  - Don't import errant drives (e.g., a drive without plays).
+
 0.0.9
 =====
   - Windows can't handle symlinks in setup.py.
