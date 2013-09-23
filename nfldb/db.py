@@ -108,8 +108,7 @@ def connect(database=None, user=None, password=None, host=None, port=None,
         host, port = conf['host'], conf['port']
 
     conn = psycopg2.connect(database=database, user=user, password=password,
-                            host=host, port=port,
-                            cursor_factory=RealDictCursor)
+                            host=host, port=port)
 
     # Start the migration. Make sure if this is the initial setup that
     # the DB is empty.
@@ -272,7 +271,7 @@ class Tx (object):
         self.__cursor = None
         self.__factory = factory
         if self.__factory is None:
-            self.__factory = self.__conn.cursor_factory
+            self.__factory = RealDictCursor
 
     def __enter__(self):
         self.__cursor = self.__conn.cursor(name=self.__name,
