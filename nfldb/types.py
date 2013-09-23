@@ -1996,6 +1996,8 @@ class Game (object):
 
         game._drives = []
         for drive in g.drives:
+            if not hasattr(drive, 'game'):
+                continue
             game._drives.append(Drive._from_nflgame(db, game, drive))
         return game
 
