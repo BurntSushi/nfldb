@@ -2160,6 +2160,17 @@ class Game (object):
         """The date and time that this game was last updated."""
 
     @property
+    def is_playing(self):
+        """
+        Returns `True` is the game is currently being played and
+        `False` otherwise.
+        
+        A game is being played if it is not finished and if the current
+        time proceeds the game's start time.
+        """
+        return not self.finished and now() >= self.start_time
+
+    @property
     def drives(self):
         """
         A list of `nfldb.Drive`s for this game. They are automatically
