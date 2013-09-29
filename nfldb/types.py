@@ -1122,7 +1122,7 @@ class PlayPlayer (object):
 
     _sql_fields = _sql_columns + _sql_derived
 
-    __slots__ = _sql_fields + ['_db', '_play', '_player']
+    __slots__ = _sql_fields + ['_db', '_play', '_player', 'fields']
 
     # Document instance variables for derived SQL fields.
     # We hide them from the public interface, but make the doco
@@ -1255,9 +1255,13 @@ class PlayPlayer (object):
         The team that this player belonged to when he recorded the
         statistics in this play.
         """
+        self.fields = set()
+        """The set of non-zero statistical fields set."""
+
         seta = setattr
         for cat in stats:
             seta(self, cat, stats[cat])
+            self.fields.add(cat)
 
     @property
     def play(self):
