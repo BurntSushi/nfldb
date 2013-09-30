@@ -634,6 +634,14 @@ class Query (Condition):
         self._andalso += conds
         return self
 
+    def orelse(self, *conds):
+        """
+        Adds the list of `nfldb.Query` objects in `conds` to this
+        query's list of disjunctive conditions.
+        """
+        self._orelse += conds
+        return self
+
     def game(self, **kw):
         """
         Specify search criteria for an NFL game. The possible fields
