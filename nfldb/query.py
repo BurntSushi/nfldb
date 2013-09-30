@@ -1221,6 +1221,11 @@ class Query (Condition):
             for row in cur.fetchall():
                 player.add(row[0])
 
+            # Don't filter games/drives/plays/play_players if we're just
+            # retrieving the player meta directly.
+            if as_table == 'player':
+                return {'player': player}
+
             player_pks = pkin(['player_id'], player)
             cur.execute('''
                 SELECT gsis_id, drive_id, play_id, player_id
