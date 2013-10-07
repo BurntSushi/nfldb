@@ -250,6 +250,20 @@ def games_missing(cursor):
     return sorted(nada, key=int)
 
 
+def update_game_schedules(db):
+    """
+    Updates the schedule data of every game in the database.
+    """
+    log('Updating all game schedules... ', end='')
+    with nfldb.Tx(db) as cursor:
+        lock_tables(cursor)
+        for gsis_id in nflgame.schedule.games_byid:
+            g = game_from_id(cursor, gsis_id)
+            vals = g._row
+            nfldb.db._upsert(cursor, 'game', vals, [vals[0]])
+    log('done.')
+
+
 def update(db, player_interval=(60 * 60 * 12)):
     """
     Does a single monolithic update of players, games, drives and
@@ -298,15 +312,7 @@ def update(db, player_interval=(60 * 60 * 12)):
         update_players(cursor, player_interval)
 
     with nfldb.Tx(db) as cursor:
-        log('Locking write access to tables... ', end='')
-        cursor.execute('''
-            LOCK TABLE player IN SHARE ROW EXCLUSIVE MODE;
-            LOCK TABLE game IN SHARE ROW EXCLUSIVE MODE;
-            LOCK TABLE drive IN SHARE ROW EXCLUSIVE MODE;
-            LOCK TABLE play IN SHARE ROW EXCLUSIVE MODE;
-            LOCK TABLE play_player IN SHARE ROW EXCLUSIVE MODE
-        ''')
-        log('done.')
+        lock_tables(cursor)
 
         log('Updating season phase, year and week... ', end='')
         update_season_state(cursor)
@@ -338,6 +344,18 @@ def update(db, player_interval=(60 * 60 * 12)):
             log('done.')
 
 
+def lock_tables(cursor):
+    log('Locking write access to tables... ', end='')
+    cursor.execute('''
+        LOCK TABLE player IN SHARE ROW EXCLUSIVE MODE;
+        LOCK TABLE game IN SHARE ROW EXCLUSIVE MODE;
+        LOCK TABLE drive IN SHARE ROW EXCLUSIVE MODE;
+        LOCK TABLE play IN SHARE ROW EXCLUSIVE MODE;
+        LOCK TABLE play_player IN SHARE ROW EXCLUSIVE MODE
+    ''')
+    log('done.')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Updates the nfldb database. It may be run at any '
@@ -356,6 +374,9 @@ if __name__ == '__main__':
             'interval is needed since meta data does not change frequently '
             'and because each update requires a few dozen HTTP requests to '
             'NFL.com.')
+    aa('--update-schedules', action='store_true',
+       help='When set, the game schedules are refreshed from the data in '
+            'nflgame.')
     args = parser.parse_args()
 
     def doit():
@@ -371,7 +392,10 @@ if __name__ == '__main__':
         nfldb.set_timezone(db, 'UTC')
         log('done.')
 
-        update(db, player_interval=args.player_interval)
+        if args.update_schedules:
+            update_game_schedules(db)
+        else:
+            update(db, player_interval=args.player_interval)
 
         log('Closing database connection... ', end='')
         db.close()
