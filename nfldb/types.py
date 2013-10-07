@@ -1286,6 +1286,36 @@ class PlayPlayer (object):
         return self._player
 
     @property
+    def points(self):
+        """
+        The number of points scored in this player statistic. This
+        accounts for touchdowns, extra points, two point conversions,
+        field goals and safeties.
+        """
+        pvals = [
+            ('defense_frec_tds', 6),
+            ('defense_int_tds', 6),
+            ('defense_misc_tds', 6),
+            ('fumbles_rec_tds', 6),
+            ('kicking_rec_tds', 6),
+            ('kickret_tds', 6),
+            ('passing_tds', 6),
+            ('puntret_tds', 6),
+            ('receiving_tds', 6),
+            ('rushing_tds', 6),
+            ('kicking_xpmade', 1),
+            ('passing_twoptm', 2),
+            ('receiving_twoptm', 2),
+            ('rushing_twoptm', 2),
+            ('kicking_fgm', 3),
+            ('defense_safe', 2),
+        ]
+        for field, pval in pvals:
+            if getattr(self, field, 0) != 0:
+                return pval
+        return 0.0
+
+    @property
     def _row(self):
         return _as_row(PlayPlayer._sql_columns, self)
 
@@ -1614,6 +1644,19 @@ class Play (object):
                     pp._play = self
                     self._play_players.append(pp)
         return self._play_players
+    
+    @property
+    def points(self):
+        """
+        Returns the number of points scored in this play. See the
+        documentation for `nfldb.PlayPlayer`.`nfldb.PlayPlayer.points`
+        for details on what is included.
+        """
+        for pp in self.play_players:
+            pts = pp.points
+            if pts != 0:
+                return pts
+        return 0
 
     @property
     def _row(self):
