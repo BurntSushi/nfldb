@@ -1214,16 +1214,18 @@ class Query (Condition):
                     'player': player}
 
         def ids_player(cur):
-            cur.execute('''
-                SELECT player_id FROM player %s %s
-            ''' % (_prefix_and(where('player')), osql('player')))
-            player = IdSet.empty()
-            for row in cur.fetchall():
-                player.add(row[0])
+            w = (_prefix_and(where('player')) + ' ' + osql('player')).strip()
+            if not w:
+                player = IdSet.full()
+            else:
+                cur.execute('SELECT player_id FROM player %s' % w)
+                player = IdSet.empty()
+                for row in cur.fetchall():
+                    player.add(row[0])
 
-            # Don't filter games/drives/plays/play_players if we're just
-            # retrieving the player meta directly.
-            if as_table == 'player':
+            # Don't filter games/drives/plays/play_players if there is no
+            # filter.
+            if not _pk_play(cur, ids):
                 return {'player': player}
 
             player_pks = pkin(['player_id'], player)
