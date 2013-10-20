@@ -276,6 +276,16 @@ class Tx (object):
     def __enter__(self):
         self.__cursor = self.__conn.cursor(name=self.__name,
                                            cursor_factory=self.__factory)
+        c = self.__cursor
+
+        # class _ (object): 
+            # def execute(self, *args, **kwargs): 
+                # c.execute(*args, **kwargs) 
+                # print(c.query) 
+#  
+            # def __getattr__(self, k): 
+                # return getattr(c, k) 
+        return c
         return self.__cursor
 
     def __exit__(self, typ, value, traceback):
