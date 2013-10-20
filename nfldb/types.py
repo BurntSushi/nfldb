@@ -1937,6 +1937,9 @@ class Drive (object):
         vals = self._row
         _upsert(cursor, 'drive', vals, vals[0:2])
 
+        if not self._plays:
+            return
+
         # Remove any plays that are stale.
         cursor.execute('''
             DELETE FROM play
@@ -2287,6 +2290,9 @@ class Game (object):
     def _save(self, cursor):
         vals = self._row
         _upsert(cursor, 'game', vals, [vals[0]])
+
+        if not self._drives:
+            return
 
         # Remove any drives that are stale.
         cursor.execute('''
