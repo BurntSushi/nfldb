@@ -17,7 +17,7 @@ import nfldb.team
 
 __pdoc__ = {}
 
-api_version = 3
+api_version = 4
 __pdoc__['api_version'] = \
     """
     The schema version that this library corresponds to. When the schema
@@ -286,7 +286,6 @@ class Tx (object):
             # def __getattr__(self, k): 
                 # return getattr(c, k) 
         return c
-        return self.__cursor
 
     def __exit__(self, typ, value, traceback):
         if not self.__cursor.closed:
@@ -740,4 +739,11 @@ def _migrate_3(c):
         CREATE INDEX pp_in_gsis_player_id ON play_player
             (gsis_id ASC, player_id ASC);
         CREATE INDEX pp_in_team ON play_player (team ASC);
+    ''')
+
+def _migrate_4(c):
+    c.execute('''
+        UPDATE team SET city = 'New York' WHERE team_id IN ('NYG', 'NYJ');
+        UPDATE team SET name = 'Giants' WHERE team_id = 'NYG';
+        UPDATE team SET name = 'Jets' WHERE team_id = 'NYJ';
     ''')

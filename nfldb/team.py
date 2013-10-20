@@ -23,8 +23,8 @@ teams = [
     ['MIN', 'Minnesota', 'Vikings', 'Minnesota Vikings'],
     ['NE', 'New England', 'Patriots', 'New England Patriots', 'N.E.', 'NWE'],
     ['NO', 'New Orleans', 'Saints', 'New Orleans Saints', 'N.O.', 'NOR'],
-    ['NYG', 'Giants', 'New York Giants', 'N.Y.G.'],
-    ['NYJ', 'Jets', 'New York Jets', 'N.Y.J.'],
+    ['NYG', 'New York', 'Giants', 'New York Giants', 'N.Y.G.'],
+    ['NYJ', 'New York', 'Jets', 'New York Jets', 'N.Y.J.'],
     ['OAK', 'Oakland', 'Raiders', 'Oakland Raiders'],
     ['PHI', 'Philadelphia', 'Eagles', 'Philadelphia Eagles'],
     ['PIT', 'Pittsburgh', 'Steelers', 'Pittsburgh Steelers'],
@@ -47,6 +47,9 @@ def standard_team(team):
     """
     if not team:
         return 'UNK'
+    assert team.lower() != 'new york', \
+           'Cannot resolve "New York" as a team. Ambiguous.'
+
     team = team.lower()
     for variants in teams:
         for variant in variants:
