@@ -1644,7 +1644,7 @@ class Play (object):
                     pp._play = self
                     self._play_players.append(pp)
         return self._play_players
-    
+
     @property
     def points(self):
         """
@@ -2214,7 +2214,7 @@ class Game (object):
         """
         Returns `True` is the game is currently being played and
         `False` otherwise.
-        
+
         A game is being played if it is not finished and if the current
         time proceeds the game's start time.
         """

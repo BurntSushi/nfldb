@@ -278,13 +278,13 @@ class Tx (object):
                                            cursor_factory=self.__factory)
         c = self.__cursor
 
-        # class _ (object): 
-            # def execute(self, *args, **kwargs): 
-                # c.execute(*args, **kwargs) 
-                # print(c.query) 
-#  
-            # def __getattr__(self, k): 
-                # return getattr(c, k) 
+        #class _ (object):
+        #    def execute(self, *args, **kwargs):
+        #        c.execute(*args, **kwargs)
+        #        print(c.query)
+
+        #    def __getattr__(self, k):
+        #        return getattr(c, k)
         return c
 
     def __exit__(self, typ, value, traceback):
@@ -740,6 +740,7 @@ def _migrate_3(c):
             (gsis_id ASC, player_id ASC);
         CREATE INDEX pp_in_team ON play_player (team ASC);
     ''')
+
 
 def _migrate_4(c):
     c.execute('''
