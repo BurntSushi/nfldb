@@ -18,6 +18,9 @@ _batch_size = 150
 """
 The number of games to batch before sending data to the database
 server.
+
+XXX: You might want to set this to a very low number in low memory
+environments. e.g., `5`.
 """
 
 
