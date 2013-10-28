@@ -45,10 +45,10 @@ def standard_team(team):
     known by nfldb (case insensitive). If no team can be found, then
     `"UNK"` is returned.
     """
-    if not team:
+    if not team or team.lower == 'new york':
         return 'UNK'
-    assert team.lower() != 'new york', \
-           'Cannot resolve "New York" as a team. Ambiguous.'
+    # assert team.lower() != 'new york', \ 
+           # 'Cannot resolve "New York" as a team. Ambiguous.' 
 
     team = team.lower()
     for variants in teams:
