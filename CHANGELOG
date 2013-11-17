@@ -1,3 +1,28 @@
+0.0.12
+======
+  - Don't depend on a specific version of pytz.
+  - Change `nfldb-update` batch size so that it has a higher rate of
+    success in lower memory environments.
+
+0.0.11
+======
+  - Fixed city and team name for New York teams.
+  - Set the cursor factory at cursor init instead of connection init.
+    (This lets us use an older version of psycopg2.)
+  - Added an `is_playing` property to games.
+  - Expose `orelse` in the query interface, even though its semantics
+    are confusing and unclear.
+  - Added a `points` convenience method to compute the number of points
+    scored in a single player statistic.
+  - Provided a way to update only game schedules with the `nfldb-update`
+    script. This is useful when game schedules change midway through
+    the season. Currently, it must be run manually.
+  - Don't update the DB with drives/plays if none are reported in the
+    JSON. (In particular, this indicates corrupt JSON while the game
+    is ongoing, so ignore it.)
+  - `standard_team` cannot reasonably resolve "new york". It will now
+    fail with a helpful assertion error.
+
 0.0.10
 ======
   - Don't import errant drives (e.g., a drive without plays).
