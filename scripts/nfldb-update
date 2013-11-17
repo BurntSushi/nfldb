@@ -14,13 +14,15 @@ import nflgame
 import nflgame.live
 
 
-_batch_size = 150
+_batch_size = 5
 """
 The number of games to batch before sending data to the database
 server.
 
-XXX: You might want to set this to a very low number in low memory
-environments. e.g., `5`.
+You might want to set this to a higher number (e.g., 150) if you're
+rebuilding the database from scratch. A higher number requires more
+memory (where `psycopg2` will fail with a mysterious and seemingly
+unrelated error message), so we set it very low for the common case.
 """
 
 
