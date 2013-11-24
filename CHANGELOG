@@ -1,3 +1,11 @@
+0.0.14
+======
+  - The "weight" and "height" columns are now numeric.
+    This is consistent with the change to nflgame to sanitize height data
+    so that it is all reported in inches.
+  - In light of the aforementioned change, nfldb now requires nflgame 1.1.23
+    or newer.
+
 0.0.13
 ======
   - Dummy release because I messed up. No substantial changes.
