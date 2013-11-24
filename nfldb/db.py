@@ -17,7 +17,7 @@ import nfldb.team
 
 __pdoc__ = {}
 
-api_version = 4
+api_version = 5
 __pdoc__['api_version'] = \
     """
     The schema version that this library corresponds to. When the schema
@@ -747,4 +747,14 @@ def _migrate_4(c):
         UPDATE team SET city = 'New York' WHERE team_id IN ('NYG', 'NYJ');
         UPDATE team SET name = 'Giants' WHERE team_id = 'NYG';
         UPDATE team SET name = 'Jets' WHERE team_id = 'NYJ';
+    ''')
+
+def _migrate_5(c):
+    c.execute('''
+        UPDATE player SET weight = '0', height = '0'
+    ''')
+    c.execute('''
+        ALTER TABLE player
+            ALTER COLUMN height TYPE usmallint USING height::usmallint,
+            ALTER COLUMN weight TYPE usmallint USING weight::usmallint;
     ''')
