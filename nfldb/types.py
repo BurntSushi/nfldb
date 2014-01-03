@@ -1984,7 +1984,7 @@ class Game (object):
 
     _sql_fields = _sql_columns + _sql_derived
 
-    __slots__ = _sql_fields + ['_db', '_drives']
+    __slots__ = _sql_fields + ['_db', '_drives', '_plays']
 
     # Document instance variables for derived SQL fields.
     __pdoc__['Game.winner'] = '''The winner of this game.'''
@@ -2113,6 +2113,7 @@ class Game (object):
         `nfldb.Game.from_row` or `nfldb.Game.from_id`.
         """
         self._drives = None
+        self._plays = None
 
         self._db = db
         """
@@ -2248,11 +2249,17 @@ class Game (object):
         A list of `nfldb.Play` objects in this game. Data is retrieved
         from the database if it hasn't been already.
         """
-        plays = []
-        for drive in self.drives:
-            for play in drive.plays:
-                plays.append(play)
-        return plays
+        if self._plays is None:
+            self._plays = []
+            with Tx(self._db) as cursor:
+                cursor.execute('''
+                    SELECT %s FROM play WHERE gsis_id = %s
+                    ORDER BY time ASC, play_id ASC
+                ''' % (select_columns(Play), '%s'), (self.gsis_id,))
+                for row in cursor.fetchall():
+                    p = Play.from_row(self._db, row)
+                    self._plays.append(p)
+        return self._plays
 
     @property
     def play_players(self):
