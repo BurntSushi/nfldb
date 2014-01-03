@@ -2289,6 +2289,50 @@ class Game (object):
                     self._plays.append(p)
         return self._plays
 
+    def plays_through_time(self, time):
+        """
+        A list of `nfldb.Play` objects in this game that 
+        occurred before the given time.
+        """
+        pos_of_t = 0
+        end_time = Clock.from_str((time.split(" ")[0]),(time.split(" ")[1]))
+        sorted_plays = sorted(self.plays, key=lambda play: play.time)
+        for p in sorted_plays:
+            if end_time > p.time:
+                pos_of_t += 1
+        return sorted_plays[:pos_of_t]
+	
+    def scoring_plays_through_time(self, time):
+        """
+        A list of `nfldb.Play` objects in this game that 
+        occurred before the given time and resulted in a score.
+        """
+        plays_through_time = self.plays_through_time(time)
+        scoring_plays = filter(lambda play: play.points, plays_through_time)
+        return scoring_plays
+	
+    def score_at_time(self, time):
+        """
+        A tuple representing the score for the 
+        (home, away) teams at a given time.
+        """
+        scoring_plays = self.scoring_plays_through_time(time)
+        home_score = 0
+        away_score = 0
+        for p in scoring_plays:
+            if p.scoring_team == self.home_team:
+        	    home_score += p.points
+            else:
+                away_score += p.points
+        return (home_score, away_score)
+
+    def score_at_play(self, play):
+        """
+        A tuple representing the score for the 
+        (home, away) teams at the time of a given play.
+        """
+        return score_at_time(str(play.time))
+
     @property
     def play_players(self):
         """
