@@ -1316,6 +1316,19 @@ class PlayPlayer (object):
         return 0.0
 
     @property
+    def scoring_team(self):
+        """
+        If this is a scoring statistic, returns the team that scored.
+        Otherwise, returns None.
+
+        N.B. `nfldb.PlayPlayer.scoring_team` returns a valid team if
+        and only if `nfldb.PlayPlayer.points` is greater than 0.
+        """
+        if self.points > 0:
+            return self.team
+        return None
+
+    @property
     def _row(self):
         return _as_row(PlayPlayer._sql_columns, self)
 
@@ -1657,6 +1670,21 @@ class Play (object):
             if pts != 0:
                 return pts
         return 0
+
+    @property
+    def scoring_team(self):
+        """
+        If this is a scoring play, returns the team that scored points.
+        Otherwise, returns None.
+
+        N.B. `nfldb.Play.scoring_team` returns a valid team if and only
+        if `nfldb.Play.points` is greater than 0.
+        """
+        for pp in self.play_players:
+            t = pp.scoring_team
+            if t is not None:
+                return t
+        return None
 
     @property
     def _row(self):
