@@ -115,18 +115,19 @@ def _play_time(drive, play, next_play):
     return None
 
 
-def _next_play_with_time(plays, play):
+def _next_play_with(plays, play, pred):
     """
-    Returns the next `nfldb.Play` after `play` in `plays` with valid
-    time data. If such a play does not exist, then `None` is returned.
+    Returns the next `nfldb.Play` after `play` in `plays` where `pred`
+    returns True (given a `nfldb.Play` object).  If such a play does
+    not exist, then `None` is returned.
     """
     get_next = False
     for p in plays:
         if get_next:
-            # Don't take a play without time info.
-            # e.g., Two timeouts in a row, or a two-minute warning
+            # Don't take a play that isn't satisfied.
+            # e.g. for time, Two timeouts in a row, or a two-minute warning
             # next to a timeout.
-            if not p.time:
+            if not pred(p):
                 continue
             return p
         if p.play_id == play.play_id:
@@ -1817,8 +1818,8 @@ class Drive (object):
         drive._plays = []
         for play in candidates:
             if play.time is None:
-                play.time = _play_time(drive, play,
-                                       _next_play_with_time(candidates, play))
+                next = _next_play_with(candidates, play, lambda p: p.time)
+                play.time = _play_time(drive, play, next)
             if play.time is not None:
                 drive._plays.append(play)
         return drive
@@ -2314,49 +2315,94 @@ class Game (object):
                     self._plays.append(p)
         return self._plays
 
-    def plays_through_time(self, time):
+    def plays_range(self, start, end):
         """
-        A list of `nfldb.Play` objects in this game that 
-        occurred before the given time.
+        Returns a list of `nfldb.Play` objects for this game in the
+        time range specified. The range corresponds to a half-open
+        interval, i.e., `[start, end)`. Namely, all plays starting at
+        or after `start` up to plays starting *before* `end`.
+        
+        The plays are returned in the order in which they occurred.
+
+        `time{1,2}` should be an instance of the `nfldb.Clock` class.
+        (Hint: Values can be created with the `nfldb.Clock.from_str`
+        function.)
         """
-        pos_of_t = 0
-        end_time = Clock.from_str((time.split(" ")[0]),(time.split(" ")[1]))
-        sorted_plays = sorted(self.plays, key=lambda play: play.time)
-        for p in sorted_plays:
-            if end_time > p.time:
-                pos_of_t += 1
-        return sorted_plays[:pos_of_t]
-	
-    def scoring_plays_through_time(self, time):
+        import nfldb.query as query
+
+        q = query.Query(self._db)
+        q.play(gsis_id=self.gsis_id, time__ge=start, time__lt=end)
+        q.sort([('time', 'asc'), ('play_id', 'asc')])
+        return q.as_plays()
+
+    def score_in_plays(self, plays):
         """
-        A list of `nfldb.Play` objects in this game that 
-        occurred before the given time and resulted in a score.
+        Returns the scores made by the home and away teams from the
+        sequence of plays given. The scores are returned as a `(home,
+        away)` tuple. Note that this method assumes that `plays` is
+        sorted in the order in which the plays occurred.
         """
-        plays_through_time = self.plays_through_time(time)
-        scoring_plays = filter(lambda play: play.points, plays_through_time)
-        return scoring_plays
-	
+        # This method is a heuristic to compute the total number of points
+        # scored in a set of plays. Naively, this should be a simple summation
+        # of the `points` attribute of each field. However, it seems that
+        # the JSON feed (where this data comes from) heavily biases toward
+        # omitting XPs. Therefore, we attempt to add them. A brief outline
+        # of the heuristic follows.
+        #
+        # In *most* cases, a TD is followed by either an XP attempt or a 2 PTC
+        # attempt by the same team. Therefore, after each TD, we look for the
+        # next play that fits this criteria, while being careful not to find
+        # a play that has already counted toward the score. If no play was
+        # found, then we assume there was an XP attempt and that it was good.
+        # Otherwise, if a play is found matching the given TD, the point total
+        # of that play is added to the score.
+        #
+        # Note that this relies on the property that every TD is paired with
+        # an XP/2PTC with respect to the final score of a game. Namely, when
+        # searching for the XP/2PTC after a TD, it may find a play that came
+        # after a different TD. But this is OK, so long as we never double
+        # count any particular play.
+        def is_twopta(p):
+            return (p.passing_twopta > 0
+                    or p.receiving_twopta > 0
+                    or p.rushing_twopta > 0)
+
+        counted = set() # don't double count
+        home, away = 0, 0
+        for i, p in enumerate(plays):
+            pts = p.points
+            if pts > 0 and p.play_id not in counted:
+                counted.add(p.play_id)
+
+                if pts == 6:
+                    def after_td(p2):
+                        return (p.pos_team == p2.pos_team
+                                and (p2.kicking_xpa > 0 or is_twopta(p2))
+                                and p2.play_id not in counted)
+
+                    next = _next_play_with(plays, p, after_td)
+                    if next is None:
+                        pts += 1
+                    elif next.play_id not in counted:
+                        pts += next.points
+                        counted.add(next.play_id)
+                if p.scoring_team == self.home_team:
+                    home += pts
+                else:
+                    away += pts
+        return home, away
+
     def score_at_time(self, time):
         """
-        A tuple representing the score for the 
-        (home, away) teams at a given time.
-        """
-        scoring_plays = self.scoring_plays_through_time(time)
-        home_score = 0
-        away_score = 0
-        for p in scoring_plays:
-            if p.scoring_team == self.home_team:
-        	    home_score += p.points
-            else:
-                away_score += p.points
-        return (home_score, away_score)
+        Returns the score of the game at the time specified as a
+        `(home, away)` tuple.
 
-    def score_at_play(self, play):
+        `time` should be an instance of the `nfldb.Clock` class.
+        (Hint: Values can be created with the `nfldb.Clock.from_str`
+        function.)
         """
-        A tuple representing the score for the 
-        (home, away) teams at the time of a given play.
-        """
-        return score_at_time(str(play.time))
+        start = Clock.from_str('Pregame', '0:00')
+        return self.score_in_plays(self.plays_range(start, time))
 
     @property
     def play_players(self):
