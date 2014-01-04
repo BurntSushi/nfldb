@@ -814,6 +814,31 @@ class Clock (object):
         quarter in the game.
         """
 
+    def add_seconds(self, seconds):
+        """
+        Adds the number of seconds given to the current clock time
+        and returns a new clock time. `seconds` may be positive
+        or negative. If a boundary is reached (e.g., `Pregame` or
+        `Final`), then subtracting or adding more seconds has no
+        effect.
+        """
+        elapsed = self.elapsed + seconds
+        phase_jump = 0
+        if elapsed < 0 or elapsed > Clock._phase_max:
+            phase_jump = elapsed // Clock._phase_max
+        try:
+            phase_val = self.phase.value + phase_jump
+            if self.phase.value <= Enums.game_phase.Half.value <= phase_val:
+                phase_val += 1
+            elif phase_val <= Enums.game_phase.Half.value <= self.phase.value:
+                phase_val -= 1
+            phase = Enums.game_phase(phase_val)
+            return Clock(phase, elapsed % (1 + Clock._phase_max))
+        except ValueError:
+            if phase_val < 0:
+                return Clock(Enums.game_phase.Pregame, 0)
+            return Clock(Enums.game_phase.Final, 0)
+
     @property
     def minutes(self):
         """
