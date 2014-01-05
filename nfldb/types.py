@@ -1944,7 +1944,7 @@ class Drive (object):
         game is retrieved from the database if it hasn't been already.
         """
         if self._game is None:
-            return Game.from_id(self.gsis_id)
+            return Game.from_id(self._db, self.gsis_id)
         return self._game
 
     @property
