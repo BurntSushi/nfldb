@@ -749,6 +749,7 @@ def _migrate_4(c):
         UPDATE team SET name = 'Jets' WHERE team_id = 'NYJ';
     ''')
 
+
 def _migrate_5(c):
     c.execute('''
         UPDATE player SET weight = '0', height = '0'

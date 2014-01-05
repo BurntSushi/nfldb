@@ -1712,7 +1712,7 @@ class Play (object):
                 return t
         return None
 
-    def score(self,before=False):
+    def score(self, before=False):
         """
         Returns the score of the game immediately after this play as a
         tuple of the form `(home_score, away_score)`.
@@ -1734,7 +1734,7 @@ class Play (object):
                 return (s[0] - 1, s[1])
             return (s[0], s[1] - 1)
         return s
-               
+
     @property
     def _row(self):
         return _as_row(Play._sql_columns, self)
@@ -1994,7 +1994,7 @@ class Drive (object):
                     self._plays.append(p)
         return self._plays
 
-    def score(self,before=False):
+    def score(self, before=False):
         """
         Returns the score of the game immediately after this drive as a
         tuple of the form `(home_score, away_score)`.
@@ -2360,7 +2360,7 @@ class Game (object):
         time range specified. The range corresponds to a half-open
         interval, i.e., `[start, end)`. Namely, all plays starting at
         or after `start` up to plays starting *before* `end`.
-        
+
         The plays are returned in the order in which they occurred.
 
         `time{1,2}` should be an instance of the `nfldb.Clock` class.
@@ -2406,7 +2406,7 @@ class Game (object):
                     or p.receiving_twopta > 0
                     or p.rushing_twopta > 0)
 
-        counted = set() # don't double count
+        counted = set()  # don't double count
         home, away = 0, 0
         for i, p in enumerate(plays):
             pts = p.points
