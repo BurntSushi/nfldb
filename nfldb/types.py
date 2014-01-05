@@ -1712,6 +1712,21 @@ class Play (object):
                 return t
         return None
 
+    def score(self,before=False):
+        score = Game.from_id(self._db, self.gsis_id).score_at_time(self.time)
+        if before:
+            return score
+        else:
+            # Prevent double-counting of XP's that results from heuristic
+            if self.kicking_xpa > 0:
+                return score
+            # Home team scoring play, add play's points to home total
+            elif self.scoring_team == Game.from_id(self._db, self.gsis_id).home_team:
+               return (score[0] + self.points, score[1])
+            # Away team scoring play, add play's points to away total
+            elif self.scoring_team == Game.from_id(self._db, self.gsis_id).away_team:
+               return (score[0], score[1] + self.points)
+               
     @property
     def _row(self):
         return _as_row(Play._sql_columns, self)
@@ -1970,6 +1985,12 @@ class Drive (object):
                     p._drive = self
                     self._plays.append(p)
         return self._plays
+
+    def score(self,before=False):
+        if before:
+            return Game.from_id(self._db, self.gsis_id).score_at_time(self.start_time)
+        else:
+            return Game.from_id(self._db, self.gsis_id).score_at_time(self.end_time)
 
     @property
     def play_players(self):
