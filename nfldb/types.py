@@ -2002,11 +2002,10 @@ class Drive (object):
         If `before` is `True`, then the score will *not* include this
         drive.
         """
-        game = Game.from_id(self._db, self.gsis_id)
         if before:
-            return game.score_at_time(self.start_time)
+            return self.game.score_at_time(self.start_time)
         else:
-            return game.score_at_time(self.end_time)
+            return self.game.score_at_time(self.end_time)
 
     @property
     def play_players(self):
