@@ -75,18 +75,20 @@ def current(db):
     return tuple([None] * 3)
 
 
-def player_search(db, full_name, team=None, position=None, limit=1):
+def player_search(db, full_name, team=None, position=None,
+                  limit=1, soundex=False):
     """
     Given a database handle and a player's full name, this function
     searches the database for players with full names *similar* to the
     one given. Similarity is measured by the
-    [Levenshtein distance](http://en.wikipedia.org/wiki/Levenshtein_distance).
+    [Levenshtein distance](http://en.wikipedia.org/wiki/Levenshtein_distance),
+    or by [Soundex similarity](http://en.wikipedia.org/wiki/Soundex).
 
     Results are returned as tuples. The first element is the is a
     `nfldb.Player` object and the second element is the Levenshtein
-    distance. When `limit` is `1` (the default), then the return value
-    is a tuple.  When `limit` is more than `1`, then the return value
-    is a list of tuples.
+    (or Soundex) distance. When `limit` is `1` (the default), then the
+    return value is a tuple.  When `limit` is more than `1`, then the
+    return value is a list of tuples.
 
     If no results are found, then `(None, None)` is returned when
     `limit == 1` or the empty list is returned when `limit > 1`.
@@ -108,16 +110,32 @@ def player_search(db, full_name, team=None, position=None, limit=1):
 
         #!bash
         psql -U postgres -c 'CREATE EXTENSION fuzzystrmatch;' nfldb
+
+    Note that enabled the `fuzzystrmatch` extension also provides
+    functions for comparing using Soundex.
     """
     assert isinstance(limit, int) and limit >= 1
 
-    select_leven = 'levenshtein(full_name, %s) AS distance'
-    q = '''
-        SELECT %s, %s
-        FROM player
-        %s
-        ORDER BY distance ASC LIMIT %d
-    '''
+    if soundex:
+        # Careful, soundex distances are sorted in reverse of Levenshtein
+        # distances.
+        # Difference yields an integer in [0, 4].
+        # A 4 is an exact match.
+        fuzzy = 'difference(full_name, %s)'
+        q = '''
+            SELECT %s, %s
+            FROM player
+            %s
+            ORDER BY distance DESC LIMIT %d
+        '''
+    else:
+        fuzzy = 'levenshtein(full_name, %s)'
+        q = '''
+            SELECT %s, %s
+            FROM player
+            %s
+            ORDER BY distance ASC LIMIT %d
+        '''
     qteam, qposition = '', ''
     results = []
     with Tx(db) as cursor:
@@ -126,11 +144,11 @@ def player_search(db, full_name, team=None, position=None, limit=1):
         if position is not None:
             qposition = cursor.mogrify('position = %s', (position,))
 
-        select_leven = cursor.mogrify(select_leven, (full_name,))
+        fuzzy_filled = cursor.mogrify(fuzzy, (full_name,))
         q = q % (
             types.select_columns(types.Player),
-            select_leven,
-            _prefix_and(qteam, qposition),
+            fuzzy_filled + ' AS distance',
+            _prefix_and(fuzzy_filled + ' IS NOT NULL', qteam, qposition),
             limit
         )
         cursor.execute(q, (full_name,))
