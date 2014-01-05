@@ -1720,19 +1720,20 @@ class Play (object):
         If `before` is `True`, then the score will *not* include this
         play.
         """
-        score = Game.from_id(self._db, self.gsis_id).score_at_time(self.time)
-        if before:
-            return score
-        else:
-            # Prevent double-counting of XP's that results from heuristic
-            if self.kicking_xpa > 0:
-                return score
-            # Home team scoring play, add play's points to home total
-            elif self.scoring_team == Game.from_id(self._db, self.gsis_id).home_team:
-               return (score[0] + self.points, score[1])
-            # Away team scoring play, add play's points to away total
-            elif self.scoring_team == Game.from_id(self._db, self.gsis_id).away_team:
-               return (score[0], score[1] + self.points)
+        game = Game.from_id(self._db, self.gsis_id)
+        if not before:
+            return game.score_at_time(self.time.add_seconds(1))
+
+        s = game.score_at_time(self.time)
+        # The heuristic in `nfldb.Game.score_in_plays` blends TDs and XPs
+        # into a single play (with respect to scoring). So we have to undo
+        # that if we want the score of the game after a TD but before an XP.
+        if self.kicking_xpmade == 1:
+            score_team = self.scoring_team
+            if score_team == game.home_team:
+                return (s[0] - 1, s[1])
+            return (s[0], s[1] - 1)
+        return s
                
     @property
     def _row(self):
