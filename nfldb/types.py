@@ -1713,6 +1713,13 @@ class Play (object):
         return None
 
     def score(self,before=False):
+        """
+        Returns the score of the game immediately after this play as a
+        tuple of the form `(home_score, away_score)`.
+
+        If `before` is `True`, then the score will *not* include this
+        play.
+        """
         score = Game.from_id(self._db, self.gsis_id).score_at_time(self.time)
         if before:
             return score
@@ -1987,6 +1994,13 @@ class Drive (object):
         return self._plays
 
     def score(self,before=False):
+        """
+        Returns the score of the game immediately after this drive as a
+        tuple of the form `(home_score, away_score)`.
+
+        If `before` is `True`, then the score will *not* include this
+        drive.
+        """
         if before:
             return Game.from_id(self._db, self.gsis_id).score_at_time(self.start_time)
         else:
