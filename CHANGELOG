@@ -1,3 +1,12 @@
+0.0.15
+======
+  - Merged PRs #17 and #18. (Methods for determining score of game
+    at any time.)
+  - Clocks can now be manipulated by adding or subtracting seconds.
+  - Fix bug where the `winner` and `loser` properties of a Game
+    object weren't being set.
+  - Added the Soundex algorithm to the player_search function.
+
 0.0.14
 ======
   - The "weight" and "height" columns are now numeric.
