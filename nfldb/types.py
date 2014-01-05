@@ -2264,6 +2264,8 @@ class Game (object):
         self.time_updated = time_updated
         """The date and time that this game was last updated."""
 
+        self.winner, self.loser = winner, loser
+
     @property
     def is_playing(self):
         """
