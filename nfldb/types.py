@@ -1355,6 +1355,29 @@ class PlayPlayer (object):
         return None
 
     @property
+    def guess_position(self):
+        """
+        Guesses the position of this player based on the statistical
+        categories present.
+
+        Note that this only distinguishes the offensive positions of
+        QB, RB, WR, P and K. If defensive stats are detected, then
+        the position returned defaults to LB.
+        """
+        stat_to_pos = [
+            ('passing_att', 'QB'), ('rushing_att', 'RB'),
+            ('receiving_tar', 'WR'), ('punting_tot', 'P'),
+            ('kicking_tot', 'K'), ('kicking_fga', 'K'), ('kicking_xpa', 'K'),
+        ]
+        for c in stat_categories:
+            if c.startswith('defense_'):
+                stat_to_pos.append((c, 'LB'))
+        for stat, pos in stat_to_pos:
+            if getattr(self, stat) != 0:
+                return Enums.player_pos[pos]
+        return Enums.player_pos.UNK
+
+    @property
     def _row(self):
         return _as_row(PlayPlayer._sql_columns, self)
 

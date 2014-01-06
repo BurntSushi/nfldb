@@ -162,6 +162,27 @@ def player_search(db, full_name, team=None, position=None,
     return results
 
 
+def guess_position(pps):
+    """
+    Given a list of `nfldb.PlayPlayer` objects for the same player,
+    guess the position of the player based on the statistics recorded.
+
+    Note that this only distinguishes the offensive positions of QB,
+    RB, WR, P and K. If defensive stats are detected, then the position
+    returned defaults to LB.
+
+    The algorithm used is simple majority vote. Whichever position is
+    the most common is returned (and this may be `UNK`).
+    """
+    if len(pps) == 0:
+        return types.Enums.player_pos.UNK
+
+    counts = defaultdict(int)
+    for pp in pps:
+        counts[pp.guess_position] += 1
+    return max(counts.items(), key=lambda (_, count): count)[0]
+
+
 def _append_conds(conds, tabtype, kwargs):
     """
     Adds `nfldb.Condition` objects to the condition list `conds` for
