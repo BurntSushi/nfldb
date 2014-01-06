@@ -1,3 +1,8 @@
+0.0.16
+======
+  - Added functions for guessing the position of a player based on
+    his statistical categories.
+
 0.0.15
 ======
   - Merged PRs #17 and #18. (Methods for determining score of game
