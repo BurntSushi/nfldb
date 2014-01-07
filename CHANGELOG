@@ -1,3 +1,8 @@
+0.1.0
+=====
+  - Supports nflgame's new automatic schedule updating.
+    (nfldb now automatically updates schedules.)
+
 0.0.16
 ======
   - Added functions for guessing the position of a player based on
