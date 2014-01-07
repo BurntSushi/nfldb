@@ -43,7 +43,7 @@ def game_from_id(cursor, gsis_id):
     schedule, otherwise it creates a dummy `nfldb.Game` object with
     data from the schedule.
     """
-    schedule = nflgame.schedule.games_byid[gsis_id]
+    schedule = nflgame.sched.games[gsis_id]
     start_time = nfldb.types._nflgame_start_time(schedule)
     if (start_time - nfldb.now()).total_seconds() >= 900:
         # Bail quickly if the game isn't close to starting yet.
@@ -58,12 +58,12 @@ def game_from_id(cursor, gsis_id):
 def game_from_schedule(cursor, gsis_id):
     """
     Returns an `nfldb.Game` object from schedule data in
-    `nflgame.schedule`.
+    `nflgame.sched`.
 
     This is useful when you want to avoid initializing a
     `nflgame.game.Game` object.
     """
-    s = nflgame.schedule.games_byid[gsis_id]
+    s = nflgame.sched.games[gsis_id]
     return nfldb.Game._from_schedule(cursor.connection, s)
 
 
@@ -81,6 +81,16 @@ def update_season_state(cursor):
     ''', (typ, nflgame.live._cur_year, nflgame.live._cur_week))
 
 
+def run_cmd(*cmd):
+    try:
+        subprocess.check_call(cmd, stdout=sys.stdout, stderr=sys.stderr)
+    except subprocess.CalledProcessError as e:
+        log('`%s` failed (exit status %d)' % (' '.join(e.cmd), e.returncode))
+    except OSError as e:
+        log('`%s` failed [Errno %d]: %s'
+            % (' '.join(cmd), e.errno, e.strerror))
+
+
 def update_players(cursor, interval):
     db = cursor.connection
     cursor.execute('SELECT last_roster_download FROM meta')
@@ -94,16 +104,7 @@ def update_players(cursor, interval):
         return
 
     log('Updating player JSON database... (last update was %s)' % last)
-    cmd = [sys.executable, '-m', 'nflgame.update_players', '--no-block']
-    try:
-        subprocess.check_call(cmd, stdout=sys.stdout, stderr=sys.stderr)
-    except subprocess.CalledProcessError as e:
-        log('`%s` failed (exit status %d)' % (' '.join(e.cmd), e.returncode))
-        return
-    except OSError as e:
-        log('`%s` failed [Errno %d]: %s'
-            % (' '.join(cmd), e.errno, e.strerror))
-        return
+    run_cmd(sys.executable, '-m', 'nflgame.update_players', '--no-block')
     log('done.')
 
     # Reset the player JSON database.
@@ -252,7 +253,7 @@ def games_missing(cursor):
     cursor.execute('SELECT gsis_id FROM game')
     for row in cursor.fetchall():
         allids.add(row['gsis_id'])
-    nada = (gid for gid in nflgame.schedule.games_byid if gid not in allids)
+    nada = (gid for gid in nflgame.sched.games if gid not in allids)
     return sorted(nada, key=int)
 
 
@@ -260,13 +261,35 @@ def update_game_schedules(db):
     """
     Updates the schedule data of every game in the database.
     """
+    update_nflgame_schedules()
     log('Updating all game schedules... ', end='')
     with nfldb.Tx(db) as cursor:
         lock_tables(cursor)
-        for gsis_id in nflgame.schedule.games_byid:
+        for gsis_id in nflgame.sched.games:
             g = game_from_id(cursor, gsis_id)
             vals = g._row
             nfldb.db._upsert(cursor, 'game', vals, [vals[0]])
+    log('done.')
+
+
+def update_current_week_schedule(db):
+    update_nflgame_schedules()
+
+    phase_map = nfldb.types.Enums._nflgame_season_phase
+    phase, year, week = nfldb.current(db)
+    log('Updating schedule for (%s, %d, %d)' % (phase, year, week))
+    with nfldb.Tx(db) as cursor:
+        for gsis_id, info in nflgame.sched.games.iteritems():
+            if year == info['year'] and week == info['week'] \
+                and phase == phase_map[info['season_type']]:
+                g = game_from_id(cursor, gsis_id)
+                vals = g._row
+                nfldb.db._upsert(cursor, 'game', vals, [vals[0]])
+    log('done.')
+
+def update_nflgame_schedules():
+    log('Updating schedule JSON database...')
+    run_cmd(sys.executable, '-m', 'nflgame.update_sched')
     log('done.')
 
 
@@ -323,6 +346,8 @@ def update(db, player_interval=(60 * 60 * 12)):
         log('Updating season phase, year and week... ', end='')
         update_season_state(cursor)
         log('done.')
+
+        update_current_week_schedule(db)
 
         nada = games_missing(cursor)
         if len(nada) > 0:
@@ -381,8 +406,9 @@ if __name__ == '__main__':
             'and because each update requires a few dozen HTTP requests to '
             'NFL.com.')
     aa('--update-schedules', action='store_true',
-       help='When set, the game schedules are refreshed from the data in '
-            'nflgame.')
+       help='When set, ALL game schedules are refreshed from the data in '
+            'nflgame. (In normal operation, only the current week\'s schedule '
+            'is refreshed.)')
     args = parser.parse_args()
 
     def doit():
