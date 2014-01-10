@@ -1,3 +1,7 @@
+0.1.1
+=====
+  - Added a fix so that nfldb can work with psycopg2 2.4.x.
+
 0.1.0
 =====
   - Supports nflgame's new automatic schedule updating.
