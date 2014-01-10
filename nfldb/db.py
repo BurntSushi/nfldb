@@ -274,8 +274,18 @@ class Tx (object):
             self.__factory = RealDictCursor
 
     def __enter__(self):
-        self.__cursor = self.__conn.cursor(name=self.__name,
-                                           cursor_factory=self.__factory)
+        # No biscuits for the psycopg2 author. Changed the public API in
+        # 2.5 in a very very subtle way.
+        # In 2.4, apparently `name` cannot be `None`. Why? I don't know.
+        if psycopg2.__version__.startswith('2.5'):
+            self.__cursor = self.__conn.cursor(name=self.__name,
+                                               cursor_factory=self.__factory)
+        else:
+            if self.__name is None:
+                self.__cursor = self.__conn.cursor(
+                    cursor_factory=self.__factory)
+            else:
+                self.__cursor = self.__conn.cursor(self.__name, self.__factory)
         c = self.__cursor
 
         #class _ (object):
