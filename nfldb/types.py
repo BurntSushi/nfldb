@@ -2142,13 +2142,8 @@ class Game (object):
         if (now() - start_time).total_seconds() >= (60 * 60 * 8):
             finished = True
 
-        # The season year should always be the same for every game in the
-        # season. e.g., games played in jan-feb of 2013 are in season 2012.
-        season_year = g.schedule['year']
-        if int(g.eid[4:6]) <= 3:
-            season_year -= 1
         game = Game(db, g.eid, g.gamekey, start_time, g.schedule['week'],
-                    day_of_week, season_year, season_type, finished,
+                    day_of_week, g.schedule['year'], season_type, finished,
                     home_team, g.score_home, g.score_home_q1,
                     g.score_home_q2, g.score_home_q3, g.score_home_q4,
                     g.score_home_q5, int(g.data['home']['to']),
