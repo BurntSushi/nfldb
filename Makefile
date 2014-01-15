@@ -10,13 +10,13 @@ docs: er
 	pdoc --html --html-dir ./doc --overwrite ./nfldb
 
 er:
-	nfldb-write-erwiz > /tmp/nfldb.erwiz
-	erwiz /tmp/nfldb.erwiz doc/nfldb.pdf
-	erwiz /tmp/nfldb.erwiz doc/nfldb.png
+	nfldb-write-erd > /tmp/nfldb.er
+	erd -i /tmp/nfldb.er -o doc/nfldb.pdf
+	erd -i /tmp/nfldb.er -o doc/nfldb.png
 
-	nfldb-write-erwiz --condense > /tmp/nfldb-condensed.erwiz
-	erwiz /tmp/nfldb-condensed.erwiz doc/nfldb-condensed.pdf
-	erwiz /tmp/nfldb-condensed.erwiz doc/nfldb-condensed.png
+	nfldb-write-erd --condense > /tmp/nfldb-condensed.er
+	erd -i /tmp/nfldb-condensed.er -o doc/nfldb-condensed.pdf
+	erd -i /tmp/nfldb-condensed.er -o doc/nfldb-condensed.png
 
 	rsync doc/nfldb*{pdf,png} $(REMOTE)
 

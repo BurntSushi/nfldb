@@ -1,12 +1,12 @@
 #!/usr/bin/env python2
 
-# This script generates an erwiz file, which in turn generates a graphical
-# ER diagram using the `erwiz` program. The columns and types of each table
+# This script generates an er file, which in turn generates a graphical
+# ER diagram using my `erd` program. The columns and types of each table
 # are written by querying nfldb's information schema. Relationships between
 # entities are written out manually.
 #
 # Note that this script supports a `--condense` option that writes a smaller
-# erwiz file. Namely, it excludes many of the play and player statistical
+# er file. Namely, it excludes many of the play and player statistical
 # columns. This provides a more compact ER diagram that is a useful
 # introduction to the nfldb schema.
 
@@ -16,7 +16,7 @@ import sys
 import nfldb
 
 template_erwiz = '''
-{{title: "nfldb Entity-Relationship diagram{condensed}"; title-size: 20}}
+title {{label: "nfldb Entity-Relationship diagram{condensed}", size: "20"}}
 
 # Entities
 {entities}
@@ -26,11 +26,11 @@ template_erwiz = '''
 '''
 
 template_entity = '''
-[{name}] {{color:{color}}}
+[{name}] {{bgcolor: "{color}"}}
 {columns}
 '''
 
-template_column = '  {pk}{column}{fk}{type}'
+template_column = '  {pk}{fk}{column} {{label: "{type}"}}'
 
 tables = ['player', 'team', 'game', 'drive', 'play', 'play_player', 'meta']
 
@@ -48,8 +48,9 @@ condense_whitelist = {
 }
 
 colors = {
-    'player': 'green', 'team': 'green', 'meta': 'red',
-    'game': 'blue', 'drive': 'blue', 'play': 'blue', 'play_player': 'blue',
+    'player': '#d0e0d0', 'team': '#d0e0d0', 'meta': '#fcecec',
+    'game': '#ececfc', 'drive': '#ececfc', 'play': '#ececfc',
+    'play_player': '#ececfc',
 }
 
 
@@ -68,7 +69,7 @@ def mk_type(row):
         type += ', null'
     else:
         type += ', not null'
-    return ' [%s]' % type
+    return '%s' % type
 
 
 def is_pk(table, col):
@@ -93,7 +94,7 @@ def mk_column(row):
     col = row['column_name']
     table = row['table_name']
     pk = '*' if is_pk(table, col) else ''
-    fk = '*' if is_fk(table, col) else ''
+    fk = '+' if is_fk(table, col) else ''
     return template_column.format(pk=pk, fk=fk, column=col, type=mk_type(row))
 
 
@@ -120,23 +121,23 @@ with nfldb.Tx(db) as cursor:
 
 # No magic for relationships. Just gotta write'em out manually.
 relationships = '''
-[player] *--1 [team] <belongs-to->
-[game] *--1 [team] <has-one->
-[game] *--1 [team] <has-one->
-[drive] *--1 [team] <has-one->
-[play] *--1 [team] <has-one->
-[play_player] *--1 [team] <has-one->
+player      *--1 team
+game        *--1 team {label: "home"}
+game        *--1 team {label: "away"}
+drive       *--1 team
+play        *--1 team
+play_player *--1 team
 
-[game] 1--* [drive] <has-many->
-[game] 1--* [play] <has-many->
-[game] 1--* [play_player] <has-many->
+game        1--* drive
+game        1--* play
+game        1--* play_player
 
-[drive] 1--* [play] <has-many->
-[drive] 1--* [play_player] <has-many->
+drive       1--* play
+drive       1--* play_player
 
-[play] 1--* [play_player] <has-many->
+play        1--* play_player
 
-[player] 1--* [play_player] <has-many->
+player      1--* play_player
 '''
 
 print(template_erwiz.format(entities='\n'.join(entities),
