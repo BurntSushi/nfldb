@@ -54,12 +54,16 @@ def _nflgame_start_time(schedule):
     Given an entry in `nflgame.schedule`, return the start time of the
     game in UTC.
     """
+    # Year is always the season, so we bump it if the month is Jan-March.
+    year, month, day = schedule['year'], schedule['month'], schedule['day']
+    if 1 <= schedule['month'] <= 3:
+        year += 1
+
     # BUG: Getting the hour here will be wrong if a game starts before Noon
     # EST. Not sure what to do about it...
     hour, minute = schedule['time'].strip().split(':')
     hour, minute = (int(hour) + 12) % 24, int(minute)
-    d = datetime.datetime(schedule['year'], schedule['month'],
-                          schedule['day'], hour, minute)
+    d = datetime.datetime(year, month, day, hour, minute)
     return pytz.timezone('US/Eastern').localize(d).astimezone(pytz.utc)
 
 
