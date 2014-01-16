@@ -15,7 +15,7 @@ import sys
 
 import nfldb
 
-template_erwiz = '''
+template_erd = '''
 title {{label: "nfldb Entity-Relationship diagram{condensed}", size: "20"}}
 
 # Entities
@@ -140,6 +140,6 @@ play        1--* play_player
 player      1--* play_player
 '''
 
-print(template_erwiz.format(entities='\n'.join(entities),
-                            relationships=relationships,
-                            condensed=' (condensed)' if condense else ''))
+print(template_erd.format(entities='\n'.join(entities),
+                          relationships=relationships,
+                          condensed=' (condensed)' if condense else ''))
