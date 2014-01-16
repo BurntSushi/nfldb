@@ -1,3 +1,9 @@
+0.1.3
+=====
+  - Fix a bug where the start time of a game has the wrong
+    year if it started the year after the season started.
+    (e.g., postseason games.)
+
 0.1.2
 =====
   - nflgame now correctly stores the season of postseason
