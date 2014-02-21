@@ -1,4 +1,4 @@
-REMOTE=Geils:~/www/burntsushi.net/public_html/stuff/nfldb/
+REMOTE=geils:~/www/burntsushi.net/public_html/stuff/nfldb/
 
 all:
 	@echo "Specify a target."
