@@ -281,11 +281,12 @@ def update_current_week_schedule(db):
     with nfldb.Tx(db) as cursor:
         for gsis_id, info in nflgame.sched.games.iteritems():
             if year == info['year'] and week == info['week'] \
-                and phase == phase_map[info['season_type']]:
+                    and phase == phase_map[info['season_type']]:
                 g = game_from_id(cursor, gsis_id)
                 vals = g._row
                 nfldb.db._upsert(cursor, 'game', vals, [vals[0]])
     log('done.')
+
 
 def update_nflgame_schedules():
     log('Updating schedule JSON database...')

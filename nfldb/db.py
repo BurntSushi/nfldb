@@ -288,13 +288,13 @@ class Tx (object):
                 self.__cursor = self.__conn.cursor(self.__name, self.__factory)
         c = self.__cursor
 
-        #class _ (object):
-        #    def execute(self, *args, **kwargs):
-        #        c.execute(*args, **kwargs)
-        #        print(c.query)
+        # class _ (object):
+        #     def execute(self, *args, **kwargs):
+        #         c.execute(*args, **kwargs)
+        #         print(c.query)
 
-        #    def __getattr__(self, k):
-        #        return getattr(c, k)
+        #     def __getattr__(self, k):
+        #         return getattr(c, k)
         return c
 
     def __exit__(self, typ, value, traceback):
