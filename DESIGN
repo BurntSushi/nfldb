@@ -1,0 +1,52 @@
+This is a brief overview of the design of the `nfldb` module.
+
+  - Module is actually a package (interface is controlled via __init__.py)
+
+  - Three core pieces: db.py, types.py and query.py.
+  
+  - There's also a script that updates the database with live data.
+    (Single writer.)
+
+  - No ORM. (My experience: very easy to write slow queries.)
+    Not many entities. Relationships are simple.
+
+
+db.py
+-----
+- Connect to database and ensure version is consistent.
+  If not, migrate! (Can only go forwards. Will fail if database is newer
+  than module.)
+
+- Some other utilities: set timezone, map Python types to PostgreSQL types, 
+  build insert/update queries, create indices, etc.
+
+
+types.py
+--------
+- Provides Python types for each entity in the database (game, drive, play, 
+  player, etc.)
+
+- Some other types for things like field positions, game clock, season phase, 
+  etc.
+
+- Each type knows how to populate information from database (and from JSON 
+  feed) in addition to knowing how to save its data to the database.
+
+- Some types include convenience functions. e.g., For computing the number of 
+  points scored at any point in a game.
+
+
+query.py
+--------
+- Provides a very convenient API for querying statistics for games, players, 
+  plays, etc. Includes aggregate statistics too.
+
+- Implementation is heavily motivated by performance. Joins seemed slow at 
+  first, so there is some complexity involved in avoiding them.
+
+- Basic idea: apply search by filtering primary keys one table at a time.
+  Results aren't fetched until done filtering.
+
+- Implementation is possibly a mistake. Perhaps I should have tried harder
+  to get joins to work efficiently.
+
