@@ -187,7 +187,7 @@ def _append_conds(conds, tabtype, kwargs):
     """
     Adds `nfldb.Condition` objects to the condition list `conds` for
     the `table`. Only the values in `kwargs` that correspond to keys in
-    `keys` are used.
+    the table are used.
     """
     keys = tabtype._sql_fields
     trim = _no_comp_suffix
@@ -217,8 +217,8 @@ def _comp_suffix(s):
 def _sql_where(cur, tables, andalso, orelse, prefix=None, aggregate=False):
     """
     Returns a valid SQL condition expression given a list of
-    conjunctions and disjunctions. The list of disjunctions
-    is given the lowest precedent via grouping with parentheses.
+    conjunctions and disjunctions. The SQL written ends up looking
+    something like `(andalso) OR (orelse1) OR (orelse2) ...`.
     """
     disjunctions = []
     andsql = _cond_where_sql(cur, andalso, tables, prefix=prefix,
@@ -282,9 +282,7 @@ def _sql_pkey_in(cur, pkeys, ids, prefix=''):
     if ids.is_full:
         return None
     elif len(ids) == 0:
-        nulls = ', '.join(['NULL'] * len(pkeys))
-        return '(%s) IN ((%s))' % (', '.join(pkeys), nulls)
-
+        return 'false'  # can never be satisfied
     return '(%s) IN %s' % (', '.join(pkeys), cur.mogrify('%s', (tuple(ids),)))
 
 
@@ -953,7 +951,7 @@ class Query (Condition):
             # Normally we wouldn't need to add this restriction on players,
             # but the identifiers in `ids` correspond to either plays or
             # players, and not their combination.
-            if 'player' in tables or 'play_player':
+            if 'player' in tables:
                 player_pks = _sql_pkey_in(cursor, ['player_id'], ids['player'])
 
             q = q % (
@@ -1176,21 +1174,7 @@ class Query (Condition):
                 ids[table] = idents.intersection(add.get(table, IdSet.full()))
 
         def osql(table):
-            if table == 'play_player' and as_table == 'play':
-                # A special case to handle weird sorting issues since
-                # some tables use the same column names.
-                # When sorting plays, we only want to allow sorting on
-                # player statistical fields and nothing else (like gsis_id,
-                # play_id, etc.).
-                player_stat = False
-                for field, _ in sorter.exprs:
-                    is_derived = field in types.PlayPlayer._sql_derived
-                    if field in types._player_categories or is_derived:
-                        player_stat = True
-                        break
-                if not player_stat:
-                    return ''
-            elif table != as_table:
+            if table != as_table:
                 return ''
             return sorter.sql(tabtype=table_types[table], only_limit=True)
 
@@ -1376,8 +1360,7 @@ class Sorter (object):
             if isinstance(exprs, strtype) or isinstance(exprs, tuple):
                 self.exprs = [normal_expr(exprs)]
             else:
-                for expr in exprs:
-                    self.exprs.append(normal_expr(expr))
+                self.exprs = map(normal_expr, exprs)
 
     def sorted(self, xs):
         """

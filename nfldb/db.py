@@ -45,9 +45,9 @@ def config(config_path=''):
     file to its corresponding value. All values are strings, except for
     `port`, which is always an integer.
 
-    A total of three possible file paths are tried before
-    giving up and returning `None`. The file paths, in
-    order, are: `fp`, `sys.prefix/share/nfldb/config.ini` and
+    A total of three possible file paths are tried before giving
+    up and returning `None`. The file paths, in order, are:
+    `config_path`, `sys.prefix/share/nfldb/config.ini` and
     `$XDG_CONFIG_HOME/nfldb/config.ini`.
     """
     paths = [
@@ -147,7 +147,6 @@ def schema_version(conn):
         try:
             c.execute('SELECT version FROM meta LIMIT 1', ['version'])
         except psycopg2.ProgrammingError:
-            conn.rollback()
             return 0
         if c.rowcount == 0:
             return 0
@@ -415,7 +414,7 @@ def _create_stat_indexes(c):
 # need to update the schema version.
 #
 # The migration functions should accept a cursor as a parameter,
-# which are created in the higher-order _migrate. In particular,
+# which is created in the _migrate function. In particular,
 # each migration function is run in its own transaction. Commits
 # and rollbacks are handled automatically.
 

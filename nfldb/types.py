@@ -222,7 +222,7 @@ def _total_ordering(cls):
 class _Enum (enum.Enum):
     """
     Conforms to the `getquoted` interface in psycopg2. This maps enum
-    types to SQL.
+    types to SQL and back.
     """
     @staticmethod
     def _pg_cast(enum):
@@ -324,8 +324,9 @@ class Enums (object):
 
     Currently, `play` and `player` are the only possible values.
 
-    Note that this type is not represented in the database schema.
-    Values of this type are constructed from data in `category.py`.
+    Note that this type is not represented directly in the database
+    schema. Values of this type are constructed from data in
+    `category.py`.
     """
 
     _nflgame_season_phase = {
@@ -405,7 +406,7 @@ class Category (object):
         """
         self.is_real = is_real
         """
-        Whether this statistic is a whole number of not. Currently,
+        Whether this statistic is a real number or not. Currently,
         only the `defense_sk` statistic has `Category.is_real` set to
         `True`.
         """
@@ -451,7 +452,9 @@ _player_categories = OrderedDict(
     [(n, c) for n, c in stat_categories.items()
      if c.category_type is Enums.category_scope.player])
 
-# Let's be awesome and add auto docs.
+# Don't document these fields because there are too many.
+# Instead, the API docs will include a link to a Wiki page with a table
+# of stat categories.
 for cat in _play_categories.values():
     __pdoc__['Play.%s' % cat.category_id] = None
 for cat in _player_categories.values():
@@ -646,7 +649,7 @@ class PossessionTime (object):
     < p2 if and only if p2 corresponds to a longer time of possession
     than p1.
     """
-    __slots__ = ['__seconds']
+    __slots__ = ['_seconds']
 
     @staticmethod
     def from_str(clock_str):
@@ -668,7 +671,7 @@ class PossessionTime (object):
         seconds of the possession.
         """
         assert isinstance(seconds, int)
-        self.__seconds = seconds
+        self._seconds = seconds
 
     @property
     def valid(self):
@@ -679,7 +682,7 @@ class PossessionTime (object):
         Invalid possession times cannot be compared with other
         possession times.
         """
-        return self.__seconds is not None
+        return self._seconds is not None
 
     @property
     def total_seconds(self):
@@ -687,7 +690,7 @@ class PossessionTime (object):
         The total seconds elapsed for this possession.
         `0` is returned if this is not a valid possession time.
         """
-        return self.__seconds if self.valid else 0
+        return self._seconds if self.valid else 0
 
     @property
     def minutes(self):
@@ -697,7 +700,7 @@ class PossessionTime (object):
         minutes.
         `0` is returned if this is not a valid possession time.
         """
-        return (self.__seconds // 60) if self.valid else 0
+        return (self._seconds // 60) if self.valid else 0
 
     @property
     def seconds(self):
@@ -707,7 +710,7 @@ class PossessionTime (object):
         second.
         `0` is returned if this is not a valid possession time.
         """
-        return (self.__seconds % 60) if self.valid else 0
+        return (self._seconds % 60) if self.valid else 0
 
     def __str__(self):
         if not self.valid:
@@ -719,19 +722,19 @@ class PossessionTime (object):
         if self.__class__ is not other.__class__:
             return NotImplemented
         assert self.valid and other.valid
-        return self.__seconds < other.__seconds
+        return self._seconds < other._seconds
 
     def __eq__(self, other):
         if self.__class__ is not other.__class__:
             return NotImplemented
-        return self.__seconds == other.__seconds
+        return self._seconds == other._seconds
 
     def __conform__(self, proto):
         if proto is ISQLQuote:
             if not self.valid:
                 return AsIs("NULL")
             else:
-                return AsIs("ROW(%d)::pos_period" % self.__seconds)
+                return AsIs("ROW(%d)::pos_period" % self._seconds)
         return None
 
 
@@ -831,12 +834,15 @@ class Clock (object):
         phase_jump = 0
         if elapsed < 0 or elapsed > Clock._phase_max:
             phase_jump = elapsed // Clock._phase_max
+
+        # Always skip over halftime.
+        phase_val = self.phase.value + phase_jump
+        if self.phase.value <= Enums.game_phase.Half.value <= phase_val:
+            phase_val += 1
+        elif phase_val <= Enums.game_phase.Half.value <= self.phase.value:
+            phase_val -= 1
+
         try:
-            phase_val = self.phase.value + phase_jump
-            if self.phase.value <= Enums.game_phase.Half.value <= phase_val:
-                phase_val += 1
-            elif phase_val <= Enums.game_phase.Half.value <= self.phase.value:
-                phase_val -= 1
             phase = Enums.game_phase(phase_val)
             return Clock(phase, elapsed % (1 + Clock._phase_max))
         except ValueError:
@@ -851,6 +857,8 @@ class Clock (object):
         minutes **left in this phase** is returned. Otherwise, `0` is
         returned.
         """
+        if self.elapsed == 0:
+            return 0
         return (Clock._phase_max - self.elapsed) // 60
 
     @property
@@ -859,6 +867,8 @@ class Clock (object):
         If the clock has a time component, then the number of seconds
         **left in this phase** is returned. Otherwise, `0` is returned.
         """
+        if self.elapsed == 0:
+            return 0
         return (Clock._phase_max - self.elapsed) % 60
 
     def __str__(self):
@@ -1140,7 +1150,7 @@ class PlayPlayer (object):
     _sql_derived = ['offense_yds', 'offense_tds', 'defense_tds']
 
     # Define various additive combinations of fields.
-    # Abuse the additive identity.
+    # Component fields MUST be independent. (Abuse the additive identity.)
     _derived_sums = {
         'offense_yds': ['passing_yds', 'rushing_yds', 'receiving_yds',
                         'fumbles_rec_yds'],
@@ -1343,7 +1353,7 @@ class PlayPlayer (object):
         for field, pval in pvals:
             if getattr(self, field, 0) != 0:
                 return pval
-        return 0.0
+        return 0
 
     @property
     def scoring_team(self):
@@ -1412,9 +1422,7 @@ class PlayPlayer (object):
         a.team = a.team if a.team == b.team else None
 
         for cat in _player_categories:
-            s = getattr(a, cat) + getattr(b, cat)
-            if s != 0:
-                setattr(a, cat, s)
+            setattr(a, cat, getattr(a, cat) + getattr(b, cat))
 
         # Try to copy player meta data too.
         if a._player is None and b._player is not None:
@@ -2384,9 +2392,9 @@ class Game (object):
 
         The plays are returned in the order in which they occurred.
 
-        `time{1,2}` should be an instance of the `nfldb.Clock` class.
-        (Hint: Values can be created with the `nfldb.Clock.from_str`
-        function.)
+        `start` and `end` should be instances of the
+        `nfldb.Clock` class. (Hint: Values can be created with the
+        `nfldb.Clock.from_str` function.)
         """
         import nfldb.query as query
 
