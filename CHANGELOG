@@ -1,3 +1,7 @@
+0.1.4
+=====
+  - Some light code refactoring and doco updates.
+
 0.1.3
 =====
   - Fix a bug where the start time of a game has the wrong
