@@ -1,3 +1,7 @@
+0.1.5
+=====
+  - Support hall-of-fame games by allowing week to be `0`.
+
 0.1.4
 =====
   - Some light code refactoring and doco updates.
