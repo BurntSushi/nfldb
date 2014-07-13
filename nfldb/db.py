@@ -764,6 +764,7 @@ def _migrate_5(c):
             ALTER COLUMN weight TYPE usmallint USING weight::usmallint;
     ''')
 
+
 def _migrate_6(c):
     c.execute('''
         ALTER TABLE meta DROP CONSTRAINT meta_week_check;
