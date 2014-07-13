@@ -17,7 +17,7 @@ import nfldb.team
 
 __pdoc__ = {}
 
-api_version = 5
+api_version = 6
 __pdoc__['api_version'] = \
     """
     The schema version that this library corresponds to. When the schema
@@ -762,4 +762,14 @@ def _migrate_5(c):
         ALTER TABLE player
             ALTER COLUMN height TYPE usmallint USING height::usmallint,
             ALTER COLUMN weight TYPE usmallint USING weight::usmallint;
+    ''')
+
+def _migrate_6(c):
+    c.execute('''
+        ALTER TABLE meta DROP CONSTRAINT meta_week_check;
+        ALTER TABLE game DROP CONSTRAINT game_week_check;
+        ALTER TABLE meta ADD CONSTRAINT meta_week_check
+            CHECK (week >= 0 AND week <= 25);
+        ALTER TABLE game ADD CONSTRAINT game_week_check
+            CHECK (week >= 0 AND week <= 25);
     ''')
