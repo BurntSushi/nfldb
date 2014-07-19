@@ -41,9 +41,12 @@ def config(config_path=''):
     connection information. This function is used automatically
     by `nfldb.connect`.
 
-    The return value is a dictionary mapping a key in the configuration
-    file to its corresponding value. All values are strings, except for
-    `port`, which is always an integer.
+    The return value is a tuple. The first value is a dictionary
+    mapping a key in the configuration file to its corresponding
+    value. All values are strings, except for `port`, which is always
+    an integer. The second value is a list of paths that were searched
+    to find a config file. (When one is found, the last element in
+    this list corresponds to the actual location of the config file.)
 
     A total of three possible file paths are tried before giving
     up and returning `None`. The file paths, in order, are:
@@ -55,8 +58,10 @@ def config(config_path=''):
         path.join(sys.prefix, 'share', 'nfldb', 'config.ini'),
         path.join(_config_home, 'nfldb', 'config.ini'),
     ]
+    tried = []
     cp = ConfigParser.RawConfigParser()
     for p in paths:
+        tried.append(p)
         try:
             with open(p) as fp:
                 cp.readfp(fp)
@@ -67,10 +72,10 @@ def config(config_path=''):
                     'password': cp.get('pgsql', 'password'),
                     'host': cp.get('pgsql', 'host'),
                     'port': cp.getint('pgsql', 'port'),
-                }
+                }, tried
         except IOError:
             pass
-    return None
+    return None, tried
 
 
 def connect(database=None, user=None, password=None, host=None, port=None,
@@ -99,9 +104,10 @@ def connect(database=None, user=None, password=None, host=None, port=None,
     to get a list of valid time zones.
     """
     if database is None:
-        conf = config(config_path=config_path)
+        conf, tried = config(config_path=config_path)
         if conf is None:
-            raise IOError("Could not find valid configuration file.")
+            raise IOError("Could not find valid configuration file. "
+                          "Tried the following paths: %s" % tried)
 
         timezone, database = conf['timezone'], conf['database']
         user, password = conf['user'], conf['password']
