@@ -613,7 +613,10 @@ class FieldPosition (object):
     def __lt__(self, other):
         if self.__class__ is not other.__class__:
             return NotImplemented
-        assert self.valid and other.valid
+        if not self.valid:
+            return True
+        if not other.valid:
+            return False
         return self._offset < other._offset
 
     def __eq__(self, other):
