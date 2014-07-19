@@ -1429,8 +1429,15 @@ class Sorter (object):
             return False
         if tabtype not in self.restraining:
             return False
+        if tabtype is types.PlayPlayer:
+            # This is a terrible hack. We don't want `play_player` restraining
+            # things unless the sort is by a play_player specific field.
+            fields = set(['player_id', 'team']
+                         + types._player_categories.keys())
+        else:
+            fields = set(tabtype._sql_fields)
         for field, _ in self.exprs:
-            if field in tabtype._sql_fields:
+            if field in fields:
                 return True
         return False
 
