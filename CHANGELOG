@@ -1,3 +1,7 @@
+0.1.6
+=====
+  - Add better error message when config file can't be found.
+
 0.1.5
 =====
   - Support hall-of-fame games by allowing week to be `0`.
