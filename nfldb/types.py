@@ -1150,7 +1150,7 @@ class PlayPlayer (object):
                     + _player_categories.keys()
                     )
 
-    _sql_derived = ['offense_yds', 'offense_tds', 'defense_tds']
+    _sql_derived = ['offense_yds', 'offense_tds', 'defense_tds', 'points']
 
     # Define various additive combinations of fields.
     # Component fields MUST be independent. (Abuse the additive identity.)
@@ -1162,6 +1162,25 @@ class PlayPlayer (object):
         'defense_tds': ['defense_frec_tds', 'defense_int_tds',
                         'defense_misc_tds'],
     }
+
+    _point_values = [
+        ('defense_frec_tds', 6),
+        ('defense_int_tds', 6),
+        ('defense_misc_tds', 6),
+        ('fumbles_rec_tds', 6),
+        ('kicking_rec_tds', 6),
+        ('kickret_tds', 6),
+        ('passing_tds', 6),
+        ('puntret_tds', 6),
+        ('receiving_tds', 6),
+        ('rushing_tds', 6),
+        ('kicking_xpmade', 1),
+        ('passing_twoptm', 2),
+        ('receiving_twoptm', 2),
+        ('rushing_twoptm', 2),
+        ('kicking_fgm', 3),
+        ('defense_safe', 2),
+    ]
 
     _sql_fields = _sql_columns + _sql_derived
 
@@ -1195,6 +1214,12 @@ class PlayPlayer (object):
         Corresponds to any touchdown manufactured by the defense.
         e.g., a pick-6, fumble recovery TD, punt/FG block TD, etc.
         '''
+    __pdoc__['PlayPlayer.points'] = \
+        """
+        The number of points scored in this player statistic. This
+        accounts for touchdowns, extra points, two point conversions,
+        field goals and safeties.
+        """
 
     @staticmethod
     def _as_sql(field, prefix=None):
@@ -1204,6 +1229,9 @@ class PlayPlayer (object):
         elif field in PlayPlayer._derived_sums:
             tosum = PlayPlayer._derived_sums[field]
             return ' + '.join('%s%s' % (prefix, f) for f in tosum)
+        elif field == 'points':
+            return ' + '.join('(%s%s * %d)' % (prefix, f, pval)
+                              for f, pval in PlayPlayer._point_values)
         raise AttributeError(field)
 
     @staticmethod
@@ -1327,36 +1355,6 @@ class PlayPlayer (object):
         if self._player is None:
             self._player = Player.from_id(self._db, self.player_id)
         return self._player
-
-    @property
-    def points(self):
-        """
-        The number of points scored in this player statistic. This
-        accounts for touchdowns, extra points, two point conversions,
-        field goals and safeties.
-        """
-        pvals = [
-            ('defense_frec_tds', 6),
-            ('defense_int_tds', 6),
-            ('defense_misc_tds', 6),
-            ('fumbles_rec_tds', 6),
-            ('kicking_rec_tds', 6),
-            ('kickret_tds', 6),
-            ('passing_tds', 6),
-            ('puntret_tds', 6),
-            ('receiving_tds', 6),
-            ('rushing_tds', 6),
-            ('kicking_xpmade', 1),
-            ('passing_twoptm', 2),
-            ('receiving_twoptm', 2),
-            ('rushing_twoptm', 2),
-            ('kicking_fgm', 3),
-            ('defense_safe', 2),
-        ]
-        for field, pval in pvals:
-            if getattr(self, field, 0) != 0:
-                return pval
-        return 0
 
     @property
     def scoring_team(self):
