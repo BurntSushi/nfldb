@@ -189,10 +189,14 @@ def _append_conds(conds, tabtype, kwargs):
     the `table`. Only the values in `kwargs` that correspond to keys in
     the table are used.
     """
-    keys = tabtype._sql_fields
-    trim = _no_comp_suffix
-    for k, v in ((k, v) for k, v in kwargs.items() if trim(k) in keys):
-        conds.append(Comparison(tabtype, k, v))
+    for k, v in kwargs.items():
+        k = _no_comp_suffix(k)
+        if k.startswith(tabtype._table + '_'):
+            k_no_table_prefix = k[len(tabtype._table)+1:]
+            if k_no_table_prefix in tabtype._sql_fields:
+                conds.append(Comparison(tabtype, k_no_table_prefix, v))
+        if k in tabtype._sql_fields:
+            conds.append(Comparison(tabtype, k, v))
 
 
 def _no_comp_suffix(s):
