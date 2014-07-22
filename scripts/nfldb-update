@@ -3,6 +3,10 @@
 from __future__ import absolute_import, division, print_function
 import argparse
 from collections import defaultdict
+try:
+    from collections import OrderedDict
+except ImportError:
+    from ordereddict import OrderedDict
 import datetime
 import subprocess
 import sys
@@ -117,14 +121,18 @@ def update_players(cursor, interval):
 
     log('Updating %d players... ' % len(nflgame.players), end='')
     if num_existing == 0:  # Fast path the initial insert.
-        insert = []
+        inserts = OrderedDict()
         for p in nflgame.players.itervalues():
-            insert.append(nfldb.Player._from_nflgame_player(db, p)._row)
-        nfldb.db._big_insert(cursor, 'player', insert)
+            dbp = nfldb.Player._from_nflgame_player(db, p)
+            for table, prim, vals in dbp._rows:
+                inserts.setdefault(table, []).append(vals)
+        for table, ins in inserts.items():
+            nfldb.db._big_insert(cursor, table, ins)
     else:
         for p in nflgame.players.itervalues():
-            vals = nfldb.Player._from_nflgame_player(db, p)._row
-            nfldb.db._upsert(cursor, 'player', vals, [vals[0]])
+            dbp = nfldb.Player._from_nflgame_player(db, p)
+            for table, _, vals in dbp._rows:
+                nfldb.db._upsert(cursor, table, vals, [vals[0]])
     log('done.')
 
     # If the player table is empty at this point, then something is very
@@ -155,31 +163,34 @@ def bulk_insert_game_data(cursor, scheduled):
                 nfldb.db._big_insert(cursor, table, bulk[table])
                 bulk[table] = []
 
-    bulk = defaultdict(list)
+    bulk = OrderedDict()
     queued = 0
     for gsis_id in scheduled:
         if queued >= _batch_size:
             do()
             queued = 0
         g = game_from_id(cursor, gsis_id)
-        vals = g._row
 
         # This updates the schedule data to include all game meta data.
         # We don't use _save here, as that would recursively upsert all
         # drive/play data in the game.
-        nfldb.db._upsert(cursor, 'game', vals, [vals[0]])
+        for table, prim, vals in g._rows:
+            nfldb.db._upsert(cursor, table, vals, prim)
 
         queued += 1
         for drive in g.drives:
-            bulk['drive'].append(drive._row)
+            for table, prim, vals in drive._rows:
+                bulk.setdefault(table, []).append(vals)
             for play in drive.plays:
-                bulk['play'].append(play._row)
+                for table, prim, vals in play._rows:
+                    bulk.setdefault(table, []).append(vals)
                 for pp in play.play_players:
+                    for table, prim, vals in pp._rows:
+                        bulk.setdefault(table, []).append(vals)
                     # Whoops. Shouldn't happen often...
                     # Only inserts into the DB if the player wasn't found
                     # in the JSON database. A few weird corner cases...
                     pp.player._save(cursor)
-                    bulk['play_player'].append(pp._row)
 
     # Bulk insert leftovers.
     do()
@@ -267,8 +278,8 @@ def update_game_schedules(db):
         lock_tables(cursor)
         for gsis_id in nflgame.sched.games:
             g = game_from_id(cursor, gsis_id)
-            vals = g._row
-            nfldb.db._upsert(cursor, 'game', vals, [vals[0]])
+            for table, prim, vals in g._rows:
+                nfldb.db._upsert(cursor, table, vals, prim)
     log('done.')
 
 
@@ -283,8 +294,8 @@ def update_current_week_schedule(db):
             if year == info['year'] and week == info['week'] \
                     and phase == phase_map[info['season_type']]:
                 g = game_from_id(cursor, gsis_id)
-                vals = g._row
-                nfldb.db._upsert(cursor, 'game', vals, [vals[0]])
+                for table, prim, vals in g._rows:
+                    nfldb.db._upsert(cursor, table, vals, prim)
     log('done.')
 
 
@@ -353,11 +364,13 @@ def update(db, player_interval=(60 * 60 * 12)):
         nada = games_missing(cursor)
         if len(nada) > 0:
             log('Adding schedule data for %d games... ' % len(nada), end='')
-            insert = []
+            insert = OrderedDict()
             for gid in nada:
                 g = game_from_schedule(cursor, gid)
-                insert.append(g._row)
-            nfldb.db._big_insert(cursor, 'game', insert)
+                for table, prim, vals in g._rows:
+                    insert.setdefault(table, []).append(vals)
+            for table, vals in insert.items():
+                nfldb.db._big_insert(cursor, table, vals)
             log('done.')
 
         scheduled = games_scheduled(cursor)

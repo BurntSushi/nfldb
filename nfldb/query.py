@@ -4,13 +4,12 @@ try:
     from collections import OrderedDict
 except ImportError:
     from ordereddict import OrderedDict
-import heapq
 import re
-import sys
 
 from psycopg2.extensions import cursor as tuple_cursor
 
 from nfldb.db import Tx
+import nfldb.sql as sql
 import nfldb.types as types
 
 try:
@@ -22,8 +21,14 @@ except NameError:  # I have lofty hopes for Python 3.
 __pdoc__ = {}
 
 
-_sql_max_in = 4500
-"""The maximum number of expressions to allow in a `IN` expression."""
+_PRIMARY_KEYS = {
+    'game': ['gsis_id'],
+    'drive': ['gsis_id', 'drive_id'],
+    'play': ['gsis_id', 'drive_id', 'play_id'],
+    'play_player': ['gsis_id', 'drive_id', 'play_id', 'player_id'],
+    'player': ['player_id'],
+}
+"""The primary keys for each table."""
 
 
 def aggregate(objs):
@@ -123,18 +128,18 @@ def player_search(db, full_name, team=None, position=None,
         # A 4 is an exact match.
         fuzzy = 'difference(full_name, %s)'
         q = '''
-            SELECT %s, %s
+            SELECT {columns}
             FROM player
-            %s
-            ORDER BY distance DESC LIMIT %d
+            WHERE {where}
+            ORDER BY distance DESC LIMIT {limit}
         '''
     else:
         fuzzy = 'levenshtein(full_name, %s)'
         q = '''
-            SELECT %s, %s
+            SELECT {columns}
             FROM player
-            %s
-            ORDER BY distance ASC LIMIT %d
+            WHERE {where}
+            ORDER BY distance ASC LIMIT {limit}
         '''
     qteam, qposition = '', ''
     results = []
@@ -145,12 +150,12 @@ def player_search(db, full_name, team=None, position=None,
             qposition = cursor.mogrify('position = %s', (position,))
 
         fuzzy_filled = cursor.mogrify(fuzzy, (full_name,))
-        q = q % (
-            types.select_columns(types.Player),
-            fuzzy_filled + ' AS distance',
-            _prefix_and(fuzzy_filled + ' IS NOT NULL', qteam, qposition),
-            limit
-        )
+        columns = types.Player._sql_select_fields(types.Player._sql_fields());
+        columns.append('%s AS distance' % fuzzy_filled)
+        q = q.format(
+            columns=', '.join(columns),
+            where=sql.ands(fuzzy_filled + ' IS NOT NULL', qteam, qposition),
+            limit=limit)
         cursor.execute(q, (full_name,))
 
         for row in cursor.fetchall():
@@ -183,20 +188,19 @@ def guess_position(pps):
     return max(counts.items(), key=lambda (_, count): count)[0]
 
 
-def _append_conds(conds, tabtype, kwargs):
+def _append_conds(conds, entity, kwargs):
     """
-    Adds `nfldb.Condition` objects to the condition list `conds` for
-    the `table`. Only the values in `kwargs` that correspond to keys in
-    the table are used.
+    Adds `nfldb.Condition` objects to the condition list `conds`
+    for the `entity` type given. Only the values in `kwargs` that
+    correspond to fields in `entity` are used.
     """
-    def trim_table(k):
-        return k[len(tabtype._table)+1:]
+    allowed = set(entity._sql_fields())
     for k, v in kwargs.items():
-        if k.startswith(tabtype._table + '_'):
-            if trim_table(_no_comp_suffix(k)) in tabtype._sql_fields:
-                conds.append(Comparison(tabtype, trim_table(k), v))
-        if _no_comp_suffix(k) in tabtype._sql_fields:
-            conds.append(Comparison(tabtype, k, v))
+        kbare = _no_comp_suffix(k)
+        assert kbare in allowed, \
+            "The key '%s' does not exist for entity '%s'." \
+            % (kbare, entity.__name__)
+        conds.append(Comparison(entity, k, v))
 
 
 def _no_comp_suffix(s):
@@ -218,134 +222,6 @@ def _comp_suffix(s):
     return 'eq'
 
 
-def _sql_where(cur, tables, andalso, orelse, prefix=None, aggregate=False):
-    """
-    Returns a valid SQL condition expression given a list of
-    conjunctions and disjunctions. The SQL written ends up looking
-    something like `(andalso) OR (orelse1) OR (orelse2) ...`.
-    """
-    disjunctions = []
-    andsql = _cond_where_sql(cur, andalso, tables, prefix=prefix,
-                             aggregate=aggregate)
-    andsql = ' AND '.join(andsql)
-
-    if len(andsql) > 0:
-        andsql = '(%s)' % andsql
-        disjunctions.append(andsql)
-    disjunctions += _cond_where_sql(cur, orelse, tables, prefix=prefix,
-                                    aggregate=aggregate)
-
-    if len(disjunctions) == 0:
-        return ''
-    return '(%s)' % (' OR '.join(disjunctions))
-
-
-def _cond_where_sql(cursor, conds, tables, prefix=None, aggregate=False):
-    """
-    Returns a list of valid SQL comparisons derived from a list of
-    `nfldb.Condition` objects in `conds` and restricted to the list
-    of table names `tables`.
-    """
-    isa = isinstance
-    pieces = []
-    for c in conds:
-        if isa(c, Query) or (isa(c, Comparison) and c._table in tables):
-            sql = c._sql_where(cursor, tables, prefix=prefix,
-                               aggregate=aggregate)
-            if len(sql) > 0:
-                pieces.append(sql)
-    return pieces
-
-
-def _prefix_and(*exprs, **kwargs):
-    """
-    Given a list of SQL expressions, return a valid `WHERE` clause for
-    a SQL query with the exprs AND'd together.
-
-    Exprs that are empty are omitted.
-
-    A keyword argument `prefix` can be used to change the value of
-    `WHERE ` to something else (e.g., `HAVING `).
-    """
-    anded = ' AND '.join('(%s)' % expr for expr in exprs if expr)
-    if len(anded) == 0:
-        return ''
-    return kwargs.get('prefix', 'WHERE ') + anded
-
-
-def _sql_pkey_in(cur, pkeys, ids, prefix=''):
-    """
-    Returns a SQL IN expression of the form `(pkey1, pkey2, ..., pkeyN)
-    IN ((val1, val2, ..., valN), ...)` where `pkeyi` is a member of
-    the list `pkeys` and `(val1, val2, ..., valN)` is a member in the
-    `nfldb.query.IdSet` `ids`.
-
-    If `prefix` is set, then it is used as a prefix for each `pkeyi`.
-    """
-    pkeys = ['%s%s' % (prefix, pk) for pk in pkeys]
-    if ids.is_full:
-        return None
-    elif len(ids) == 0:
-        return 'false'  # can never be satisfied
-    return '(%s) IN %s' % (', '.join(pkeys), cur.mogrify('%s', (tuple(ids),)))
-
-
-def _pk_play(cur, ids, tables=['game', 'drive']):
-    """
-    A convenience function for calling `_sql_pkey_in` when selecting
-    from the `play` or `play_player` tables. Namely, it only uses a
-    SQL IN expression for the `nfldb.query.IdSet` `ids` when it has
-    fewer than `nfldb.query._sql_max_in` values.
-
-    `tables` should be a list of tables to specify which primary keys
-    should be used. By default, only the `game` and `drive` tables
-    are allowed, since they are usually within the limits of a SQL
-    IN expression.
-    """
-    pk = None
-    is_play = 'play' in tables or 'play_player' in tables
-    if 'game' in tables and pk is None:
-        pk = _sql_pkey_in(cur, ['gsis_id'], ids['game'])
-    elif 'drive' in tables and len(ids['drive']) <= _sql_max_in:
-        pk = _sql_pkey_in(cur, ['gsis_id', 'drive_id'], ids['drive'])
-    elif is_play and len(ids['play']) <= _sql_max_in:
-        pk = _sql_pkey_in(cur, ['gsis_id', 'drive_id', 'play_id'], ids['play'])
-    return pk
-
-
-def _play_set(ids):
-    """
-    Returns a value representing a set of plays in correspondence
-    with the given `ids` dictionary mapping `play` or `drive` to
-    `nfldb.query.IdSet`s. The value may be any combination of drive and
-    play identifiers. Use `nfldb.query._in_play_set` for membership
-    testing.
-    """
-    if not ids['play'].is_full:
-        return ('play', ids['play'])
-    elif not ids['drive'].is_full:
-        return ('drive', ids['drive'])
-    else:
-        return None
-
-
-def _in_play_set(pset, play_pk):
-    """
-    Given a tuple `(gsis_id, drive_id, play_id)`, return `True`
-    if and only if it exists in the play set `pset`.
-
-    Valid values for `pset` can be constructed with
-    `nfldb.query._play_set`.
-    """
-    if pset is None:  # No criteria for drive/play. Always true, then!
-        return True
-    elif pset[0] == 'play':
-        return play_pk in pset[1]
-    elif pset[0] == 'drive':
-        return play_pk[0:2] in pset[1]
-    assert False, 'invalid play_set value'
-
-
 class Condition (object):
     """
     An abstract class that describes the interface of components
@@ -354,23 +230,42 @@ class Condition (object):
     def __init__(self):
         assert False, "Condition class cannot be instantiated."
 
-    def _tables(self):
-        """Returns a `set` of tables used in this condition."""
+    def _entities(self):
+        """
+        Returns a `set` of entity types, inheriting from
+        `nfldb.Entity`, that are used in this condition.
+        """
         assert False, "subclass responsibility"
 
-    def _sql_where(self, cursor, table, prefix=None, aggregate=False):
+    def _sql_where(self, cursor, aliases=None, aggregate=False):
         """
         Returns an escaped SQL string that can be safely substituted
-        into the WHERE clause of a SELECT query for a particular
-        `table`.
+        into the WHERE clause of a SELECT query for a particular.
 
-        The `prefix` parameter specifies a prefix to be used for each
-        column written. If it's empty, then no prefix is used.
+        See the documentation for `nfldb.Entity` for information on
+        the `aliases` parameter.
 
         If `aggregate` is `True`, then aggregate conditions should
         be used instead of regular conditions.
         """
         assert False, "subclass responsibility"
+
+    @classmethod
+    def _disjunctions(cls, cursor, disjuncts, aliases=None, aggregate=False):
+        """
+        Returns a valid SQL condition expression of the form:
+
+            (d00 & d01 & ...) | (d10 & d11 & ...) | ...
+
+        Where `d{N}` is a `nfldb.Condition` element in `disjuncts` and
+        `d{Ni}` is an element in `d{N}`.
+        """
+        def sql(c):
+            return c._sql_where(cursor, aliases=aliases, aggregate=aggregate)
+        ds = []
+        for conjuncts in disjuncts:
+            ds.append(' AND '.join('(%s)' % sql(c) for c in conjuncts))
+        return ' OR '.join('(%s)' % d for d in ds if d)
 
 
 class Comparison (Condition):
@@ -383,22 +278,19 @@ class Comparison (Condition):
     given operator.
     """
 
-    def __init__(self, tabtype, kw, value):
+    def __init__(self, entity, kw, value):
         """
         Introduces a new condition given a user specified keyword `kw`
-        with a `tabtype` (e.g., `nfldb.Play`) and a user provided
+        with a `entity` (e.g., `nfldb.Play`) and a user provided
         value. The operator to be used is inferred from the suffix of
         `kw`. If `kw` has no suffix or a `__eq` suffix, then `=` is
         used. A suffix of `__ge` means `>=` is used, `__lt` means `<`,
         and so on.
-
-        If `value` is of the form `sql(...)` then the value represented
-        by `...` is written to the SQL query without escaping.
         """
         self.operator = '='
         """The operator used in this condition."""
 
-        self.tabtype = tabtype
+        self.entity = entity
         """The table type for this column."""
 
         self.column = None
@@ -418,29 +310,23 @@ class Comparison (Condition):
         if self.column is None:
             self.column = kw
 
-    @property
-    def _table(self):
-        return self.tabtype._table
-
-    def _tables(self):
-        return set([self.tabtype._table])
+    def _entities(self):
+        return set([self.entity])
 
     def __str__(self):
-        return '%s.%s %s %s' \
-               % (self._table, self.column, self.operator, self.value)
+        return '%s %s %s' \
+               % (self.entity._sql_field(self.column),
+                  self.operator, self.value)
 
-    def _sql_where(self, cursor, tables, prefix=None, aggregate=False):
-        field = self.tabtype._as_sql(self.column, prefix=prefix)
+    def _sql_where(self, cursor, aliases=None, aggregate=False):
+        field = self.entity._sql_field(self.column, aliases=aliases)
         if aggregate:
             field = 'SUM(%s)' % field
         paramed = '%s %s %s' % (field, self.operator, '%s')
-        if isinstance(self.value, strtype) and self.value.startswith('sql('):
-            return paramed % self.value[4:-1]
-        else:
-            if isinstance(self.value, tuple) or isinstance(self.value, list):
-                paramed = paramed % 'ANY (%s)'
-                self.value = list(self.value)  # Coerce tuples to pg ARRAYs...
-            return cursor.mogrify(paramed, (self.value,))
+        if isinstance(self.value, tuple) or isinstance(self.value, list):
+            paramed = paramed % 'ANY (%s)'
+            self.value = list(self.value)  # Coerce tuples to pg ARRAYs...
+        return cursor.mogrify(paramed, (self.value,))
 
 
 def QueryOR(db):
@@ -559,9 +445,6 @@ class Query (Condition):
         self._limit = None
         """The number of results to limit the search to."""
 
-        self._sort_tables = []
-        """The tables to restrain limiting criteria to."""
-
         self._andalso = []
         """A list of conjunctive conditions."""
 
@@ -660,8 +543,7 @@ class Query (Condition):
 
     @property
     def _sorter(self):
-        return Sorter(self._sort_exprs, self._limit,
-                      restraining=self._sort_tables)
+        return Sorter(self._sort_exprs, self._limit)
 
     def _assert_no_aggregate(self):
         assert len(self._agg_andalso) == 0 and len(self._agg_orelse) == 0, \
@@ -735,8 +617,22 @@ class Query (Condition):
         how to specify search criteria.
         """
         _append_conds(self._default_cond, types.Play, kw)
-        _append_conds(self._default_cond, types.PlayPlayer, kw)
+        return self
 
+    def play_player(self, **kw):
+        """
+        Specify search criteria for individual play player statistics.
+        The allowed fields are the columns in the `play_player`
+        table.  They are documented as instance variables in the
+        `nfldb.PlayPlayer` class. Additionally, the fields listed on
+        the [statistical categories](http://goo.gl/1qYG3C) wiki page
+        may be used. (Only the `player` statistical categories.)
+
+        This method differs from `nfldb.Query.play` in that it can be
+        used to select for individual player statistics in a play. In
+        particular, there are *zero or more* player statistics for
+        every play.
+        """
         # Technically, it isn't necessary to handle derived fields manually
         # since their SQL can be generated automatically, but it can be
         # much faster to express them in terms of boolean logic with other
@@ -748,10 +644,14 @@ class Query (Condition):
             def replace_or(*fields):
                 q = Query(self._db, orelse=True)
                 ors = dict([('%s__%s' % (f, suff), value) for f in fields])
-                self.andalso(q.play(**ors))
+                self.andalso(q.play_player(**ors))
 
-            if nosuff in types.PlayPlayer._derived_sums:
-                replace_or(*types.PlayPlayer._derived_sums[nosuff])
+            if nosuff in types.PlayPlayer._derived_combined:
+                replace_or(*types.PlayPlayer._derived_combined[nosuff])
+                kw.pop(field)
+
+        # Now add the rest of the query.
+        _append_conds(self._default_cond, types.PlayPlayer, kw)
         return self
 
     def player(self, **kw):
@@ -769,7 +669,7 @@ class Query (Condition):
 
     def aggregate(self, **kw):
         """
-        This is just like `nfldb.Query.play`, except the search
+        This is just like `nfldb.Query.play_player`, except the search
         parameters are applied to aggregate statistics.
 
         For example, to retrieve all quarterbacks who passed for at
@@ -795,9 +695,51 @@ class Query (Condition):
         restrict *what to aggregate* while aggregate criteria restrict
         *aggregated results*.)
         """
-        _append_conds(self._agg_default_cond, types.Play, kw)
         _append_conds(self._agg_default_cond, types.PlayPlayer, kw)
         return self
+
+    def _make_join_query(self, cursor, entity, only_prim=False):
+        entities = self._entities()
+        entities.discard(entity)
+
+        # If we're joining the `player` table with any other table except
+        # `play_player`, then we MUST add `play_player` as a joining table.
+        # It is the only way to bridge players and games/drives/plays.
+        #
+        # TODO: This could probably be automatically deduced in general case,
+        # but we only have one case so just check for it manually.
+        if (entity is not types.PlayPlayer and types.Player in entities) \
+                or (entity is types.Player and len(entities) > 0):
+            entities.add(types.PlayPlayer)
+
+        fields = None
+        if only_prim:
+            fields = entity._sql_tables['primary']
+        args = {
+            'select_from': entity._sql_select_from(fields=fields),
+            'joins': entity._sql_join_all(entities),
+            'where': sql.ands(self._sql_where(cursor)),
+            'groupby': '',
+            'sortby': self._sorter.sql(entity),
+        }
+
+        # We need a GROUP BY if we're joining with a table that has more
+        # specific information. e.g., selecting from game with criteria
+        # for plays.
+        if any(entity._sql_relation_distance(to) > 0 for to in entities):
+            fields = []
+            for table, _ in entity._sql_tables['tables']:
+                fields += entity._sql_primary_key(table)
+            args['groupby'] = 'GROUP BY ' + ', '.join(fields)
+
+        q = '''
+            {select_from}
+            {joins}
+            WHERE {where}
+            {groupby}
+            {sortby}
+        '''.format(**args)
+        return q
 
     def as_games(self):
         """
@@ -806,18 +748,10 @@ class Query (Condition):
         """
         self._assert_no_aggregate()
 
-        self._sort_tables = [types.Game]
-        ids = self._ids('game', self._sorter)
         results = []
-        q = 'SELECT %s FROM game %s %s'
         with Tx(self._db) as cursor:
-            q = q % (
-                types.select_columns(types.Game),
-                _prefix_and(_sql_pkey_in(cursor, ['gsis_id'], ids['game'])),
-                self._sorter.sql(tabtype=types.Game),
-            )
+            q = self._make_join_query(cursor, types.Game)
             cursor.execute(q)
-
             for row in cursor.fetchall():
                 results.append(types.Game.from_row(self._db, row))
         return results
@@ -829,26 +763,15 @@ class Query (Condition):
         """
         self._assert_no_aggregate()
 
-        self._sort_tables = [types.Drive]
-        ids = self._ids('drive', self._sorter)
-        tables = self._tables()
         results = []
-        q = 'SELECT %s FROM drive %s %s'
         with Tx(self._db) as cursor:
-            pkey = _pk_play(cursor, ids, tables=tables)
-            q = q % (
-                types.select_columns(types.Drive),
-                _prefix_and(pkey),
-                self._sorter.sql(tabtype=types.Drive),
-            )
+            q = self._make_join_query(cursor, types.Drive)
             cursor.execute(q)
-
             for row in cursor.fetchall():
-                if (row['gsis_id'], row['drive_id']) in ids['drive']:
-                    results.append(types.Drive.from_row(self._db, row))
+                results.append(types.Drive.from_row(self._db, row))
         return results
 
-    def _as_plays(self):
+    def as_plays(self, fill=True):
         """
         Executes the query and returns the results as a dictionary
         of `nlfdb.Play` objects that don't have the `play_player`
@@ -857,74 +780,48 @@ class Query (Condition):
 
         The primary key membership SQL expression is also returned.
         """
+        def make_pid(play):
+            return (play.gsis_id, play.drive_id, play.play_id)
+
         self._assert_no_aggregate()
 
-        plays = OrderedDict()
-        ids = self._ids('play', self._sorter)
-        pset = _play_set(ids)
-        pkey = None
-        q = 'SELECT %s FROM play %s %s'
-
-        tables = self._tables()
-        tables.add('play')
-
-        with Tx(self._db, factory=tuple_cursor) as cursor:
-            pkey = _pk_play(cursor, ids, tables=tables)
-
-            q = q % (
-                types.select_columns(types.Play),
-                _prefix_and(pkey),
-                self._sorter.sql(tabtype=types.Play),
-            )
-            cursor.execute(q)
-            init = types.Play._from_tuple
-            for t in cursor.fetchall():
-                pid = (t[0], t[1], t[2])
-                if _in_play_set(pset, pid):
-                    p = init(self._db, t)
-                    plays[pid] = p
-        return plays, pkey
-
-    def as_plays(self, fill=True):
-        """
-        Executes the query and returns the results as a list of
-        `nlfdb.Play` objects with the `nfldb.Play.play_players`
-        attribute filled with player statistics.
-
-        If `fill` is `False`, then player statistics will not be added
-        to each `nfldb.Play` object returned. This can significantly
-        speed things up if you don't need to access player statistics.
-
-        Note that when `fill` is `False`, the `nfldb.Play.play_player`
-        attribute is still available, but the data will be retrieved
-        on-demand for each play. Also, if `fill` is `False`, then any
-        sorting criteria specified to player statistics will be
-        ignored.
-        """
-        self._assert_no_aggregate()
-
-        self._sort_tables = [types.Play, types.PlayPlayer]
-        plays, pkey = self._as_plays()
         if not fill:
-            return plays.values()
+            results = []
+            with Tx(self._db, factory=tuple_cursor) as cursor:
+                init = types.Play._from_tuple
+                q = self._make_join_query(cursor, types.Play)
+                cursor.execute(q)
+                for row in cursor.fetchall():
+                    results.append(init(self._db, row))
+            return results
+        else:
+            plays = OrderedDict()
+            with Tx(self._db, factory=tuple_cursor) as cursor:
+                init_play = types.Play._from_tuple
+                q = self._make_join_query(cursor, types.Play)
+                cursor.execute(q)
+                for row in cursor.fetchall():
+                    play = init_play(self._db, row)
+                    play._play_players = []
+                    plays[make_pid(play)] = play
 
-        q = 'SELECT %s FROM play_player %s %s'
-        with Tx(self._db, factory=tuple_cursor) as cursor:
-            q = q % (
-                types.select_columns(types.PlayPlayer),
-                _prefix_and(pkey),
-                self._sorter.sql(tabtype=types.PlayPlayer),
-            )
-            cursor.execute(q)
-            init = types.PlayPlayer._from_tuple
-            for t in cursor.fetchall():
-                pid = (t[0], t[1], t[2])
-                if pid in plays:
-                    play = plays[pid]
-                    if play._play_players is None:
-                        play._play_players = []
-                    play._play_players.append(init(self._db, t))
-        return self._sorter.sorted(plays.values())
+                # Run the above query *again* as a subquery.
+                # This time, only fetch the primary key, and use that to
+                # fetch all the `play_player` records in one swoop.
+                ids = self._make_join_query(cursor, types.Play, only_prim=True)
+                select_from = types.PlayPlayer._sql_select_from(
+                    aliases={'play_player': 'pp'})
+                q = '''
+                    {select_from}
+                    WHERE (pp.gsis_id, pp.drive_id, pp.play_id) IN ({ids})
+                '''.format(select_from=select_from, ids=ids)
+
+                init_pp = types.PlayPlayer._from_tuple
+                cursor.execute(q)
+                for row in cursor.fetchall():
+                    pp = init_pp(self._db, row)
+                    plays[make_pid(pp)]._play_players.append(pp)
+            return plays.values()
 
     def as_play_players(self):
         """
@@ -940,35 +837,13 @@ class Query (Condition):
         """
         self._assert_no_aggregate()
 
-        self._sort_tables = [types.PlayPlayer]
-        ids = self._ids('play_player', self._sorter)
-        pset = _play_set(ids)
-        player_pks = None
-        tables = self._tables()
-        tables.add('play_player')
-
         results = []
-        q = 'SELECT %s FROM play_player %s %s'
         with Tx(self._db, factory=tuple_cursor) as cursor:
-            pkey = _pk_play(cursor, ids, tables=tables)
-
-            # Normally we wouldn't need to add this restriction on players,
-            # but the identifiers in `ids` correspond to either plays or
-            # players, and not their combination.
-            if 'player' in tables:
-                player_pks = _sql_pkey_in(cursor, ['player_id'], ids['player'])
-
-            q = q % (
-                types.select_columns(types.PlayPlayer),
-                _prefix_and(player_pks, pkey),
-                self._sorter.sql(tabtype=types.PlayPlayer),
-            )
-            cursor.execute(q)
             init = types.PlayPlayer._from_tuple
-            for t in cursor.fetchall():
-                pid = (t[0], t[1], t[2])
-                if _in_play_set(pset, pid):
-                    results.append(init(self._db, t))
+            q = self._make_join_query(cursor, types.PlayPlayer)
+            cursor.execute(q)
+            for row in cursor.fetchall():
+                results.append(init(self._db, row))
         return results
 
     def as_players(self):
@@ -978,19 +853,12 @@ class Query (Condition):
         """
         self._assert_no_aggregate()
 
-        self._sort_tables = [types.Player]
-        ids = self._ids('player', self._sorter)
         results = []
-        q = 'SELECT %s FROM player %s %s'
-        with Tx(self._db) as cur:
-            q = q % (
-                types.select_columns(types.Player),
-                _prefix_and(_sql_pkey_in(cur, ['player_id'], ids['player'])),
-                self._sorter.sql(tabtype=types.Player),
-            )
-            cur.execute(q)
+        with Tx(self._db) as cursor:
+            q = self._make_join_query(cursor, types.Player)
+            cursor.execute(q)
 
-            for row in cur.fetchall():
+            for row in cursor.fetchall():
                 results.append(types.Player.from_row(self._db, row))
         return results
 
@@ -1023,66 +891,42 @@ class Query (Condition):
         # Ideas and experiments are welcome. Using a join seems like the
         # most sensible approach at the moment (and it's simple!), but I'd like
         # to experiment with other ideas in the future.
-        tables, agg_tables = self._tables(), self._agg_tables()
-        gids, player_ids = None, None
-        joins = defaultdict(str)
+        joins = ''
         results = []
 
         with Tx(self._db) as cur:
-            if 'game' in tables:
-                joins['game'] = '''
-                    LEFT JOIN game
-                    ON play_player.gsis_id = game.gsis_id
-                '''
-            if 'drive' in tables:
-                joins['drive'] = '''
-                    LEFT JOIN drive
-                    ON play_player.gsis_id = drive.gsis_id
-                        AND play_player.drive_id = drive.drive_id
-                '''
-            if 'play' in tables or 'play' in agg_tables:
-                joins['play'] = '''
-                    LEFT JOIN play
-                    ON play_player.gsis_id = play.gsis_id
-                        AND play_player.drive_id = play.drive_id
-                        AND play_player.play_id = play.play_id
-                '''
-            if 'player' in tables:
-                joins['player'] = '''
-                    LEFT JOIN player
-                    ON play_player.player_id = player.player_id
-                '''
+            for ent in self._entities():
+                if ent is types.PlayPlayer:
+                    continue
+                joins += types.PlayPlayer._sql_join_to_all(ent)
 
-            where = self._sql_where(cur, ['game', 'drive', 'play',
-                                          'play_player', 'player'])
-            having = self._sql_where(cur, ['play', 'play_player'],
-                                     prefix='', aggregate=True)
+            sum_fields = types._player_categories.keys() \
+                         + types.PlayPlayer._sql_tables['derived']
+            select_sum_fields = types.PlayPlayer._sql_select_fields(
+                sum_fields, wrap=lambda f: 'SUM(%s)' % f)
+            where = self._sql_where(cur)
+            having = self._sql_where(cur, aggregate=True)
             q = '''
                 SELECT play_player.player_id, {sum_fields}
                 FROM play_player
-                {join_game}
-                {join_drive}
-                {join_play}
-                {join_player}
-                {where}
+                {joins}
+                WHERE {where}
                 GROUP BY play_player.player_id
-                {having}
+                HAVING {having}
                 {order}
             '''.format(
-                sum_fields=types._sum_fields(types.PlayPlayer),
-                join_game=joins['game'], join_drive=joins['drive'],
-                join_play=joins['play'], join_player=joins['player'],
-                where=_prefix_and(player_ids, where, prefix='WHERE '),
-                having=_prefix_and(having, prefix='HAVING '),
-                order=self._sorter.sql(tabtype=types.PlayPlayer, prefix=''),
+                sum_fields=', '.join(select_sum_fields),
+                joins=joins,
+                where=sql.ands(where),
+                having=sql.ands(having),
+                order=self._sorter.sql(types.PlayPlayer,
+                                       aliases={'play_player': ''}),
             )
             cur.execute(q)
 
-            fields = (types._player_categories.keys()
-                      + types.PlayPlayer._sql_derived)
             for row in cur.fetchall():
                 stats = {}
-                for f in fields:
+                for f in sum_fields:
                     v = row[f]
                     if v != 0:
                         stats[f] = v
@@ -1091,20 +935,13 @@ class Query (Condition):
                 results.append(pp)
         return results
 
-    def _tables(self):
-        """Returns all the tables referenced in the search criteria."""
+    def _entities(self):
+        """
+        Returns all the entity types referenced in the search criteria.
+        """
         tabs = set()
         for cond in self._andalso + self._orelse:
-            tabs = tabs.union(cond._tables())
-        return tabs
-
-    def _agg_tables(self):
-        """
-        Returns all the tables referenced in the aggregate search criteria.
-        """
-        tabs = set()
-        for cond in self._agg_andalso + self._agg_orelse:
-            tabs = tabs.union(cond._tables())
+            tabs = tabs.union(cond._entities())
         return tabs
 
     def show_where(self, aggregate=False):
@@ -1118,13 +955,11 @@ class Query (Condition):
         `play` and `play_player` tables is shown with aggregate
         functions applied.
         """
-        # Return criteria for all tables.
-        tables = ['game', 'drive', 'play', 'play_player', 'player']
         with Tx(self._db) as cur:
-            return self._sql_where(cur, tables, aggregate=aggregate)
+            return self._sql_where(cur, aggregate=aggregate)
         return ''
 
-    def _sql_where(self, cur, tables, prefix=None, aggregate=False):
+    def _sql_where(self, cursor, aliases=None, aggregate=False):
         """
         Returns a WHERE expression representing the search criteria
         in `self` and restricted to the tables in `tables`.
@@ -1133,180 +968,19 @@ class Query (Condition):
         functions are used.
         """
         if aggregate:
-            return _sql_where(cur, tables, self._agg_andalso, self._agg_orelse,
-                              prefix=prefix, aggregate=aggregate)
+            return Condition._disjunctions(
+                cursor, [self._agg_andalso] + [[c] for c in self._agg_orelse],
+                aliases=aliases, aggregate=aggregate)
         else:
-            return _sql_where(cur, tables, self._andalso, self._orelse,
-                              prefix=prefix, aggregate=aggregate)
-
-    def _ids(self, as_table, sorter, tables=None):
-        """
-        Returns a dictionary of primary keys matching the criteria
-        specified in this query for the following tables: game, drive,
-        play and player. The returned dictionary will have a key for
-        each table with a corresponding `IdSet`, which may be empty
-        or full.
-
-        Each `IdSet` contains primary key values for that table. In the
-        case of the `drive` and `play` table, those values are tuples.
-        """
-        # This method is where most of the complexity in this module lives,
-        # since it is where most of the performance considerations are made.
-        # Namely, the search criteria in `self` are spliced out by table
-        # and used to find sets of primary keys for each table. The primary
-        # keys are then used to filter subsequent searches on tables.
-        #
-        # The actual data returned is confined to the identifiers returned
-        # from this method.
-
-        # Initialize sets to "full". This distinguishes an empty result
-        # set and a lack of search.
-        ids = dict([(k, IdSet.full())
-                    for k in ('game', 'drive', 'play', 'player')])
-
-        # A list of fields for each table for easier access by table name.
-        table_types = {
-            'game': types.Game,
-            'drive': types.Drive,
-            'play': types.Play,
-            'play_player': types.PlayPlayer,
-            'player': types.Player,
-        }
-
-        def merge(add):
-            for table, idents in ids.items():
-                ids[table] = idents.intersection(add.get(table, IdSet.full()))
-
-        def osql(table):
-            if table != as_table:
-                return ''
-            return sorter.sql(tabtype=table_types[table], only_limit=True)
-
-        def ids_game(cur):
-            game = IdSet.empty()
-            cur.execute('''
-                SELECT gsis_id FROM game %s %s
-            ''' % (_prefix_and(self._sql_where(cur, ['game'])), osql('game')))
-
-            for row in cur.fetchall():
-                game.add(row[0])
-            return {'game': game}
-
-        def ids_drive(cur):
-            idexp = pkin(['gsis_id'], ids['game'])
-            cur.execute('''
-                SELECT gsis_id, drive_id FROM drive %s %s
-            ''' % (_prefix_and(idexp, where('drive')), osql('drive')))
-
-            game, drive = IdSet.empty(), IdSet.empty()
-            for row in cur.fetchall():
-                game.add(row[0])
-                drive.add((row[0], row[1]))
-            return {'game': game, 'drive': drive}
-
-        def ids_play(cur):
-            cur.execute('''
-                SELECT gsis_id, drive_id, play_id FROM play %s %s
-            ''' % (_prefix_and(_pk_play(cur, ids), where('play')),
-                   osql('play')))
-            pset = _play_set(ids)
-            game, drive, play = IdSet.empty(), IdSet.empty(), IdSet.empty()
-            for row in cur.fetchall():
-                pid = (row[0], row[1], row[2])
-                if not _in_play_set(pset, pid):
-                    continue
-                game.add(row[0])
-                drive.add(pid[0:2])
-                play.add(pid)
-            return {'game': game, 'drive': drive, 'play': play}
-
-        def ids_play_player(cur):
-            cur.execute('''
-                SELECT gsis_id, drive_id, play_id, player_id
-                FROM play_player %s %s
-            ''' % (_prefix_and(_pk_play(cur, ids), where('play_player')),
-                   osql('play_player')))
-            pset = _play_set(ids)
-            game, drive, play = IdSet.empty(), IdSet.empty(), IdSet.empty()
-            player = IdSet.empty()
-            for row in cur.fetchall():
-                pid = (row[0], row[1], row[2])
-                if not _in_play_set(pset, pid):
-                    continue
-                game.add(row[0])
-                drive.add(pid[0:2])
-                play.add(pid)
-                player.add(row[3])
-            return {'game': game, 'drive': drive, 'play': play,
-                    'player': player}
-
-        def ids_player(cur):
-            w = (_prefix_and(where('player')) + ' ' + osql('player')).strip()
-            if not w:
-                player = IdSet.full()
-            else:
-                cur.execute('SELECT player_id FROM player %s' % w)
-                player = IdSet.empty()
-                for row in cur.fetchall():
-                    player.add(row[0])
-
-            # Don't filter games/drives/plays/play_players if there is no
-            # filter.
-            if not _pk_play(cur, ids):
-                return {'player': player}
-
-            player_pks = pkin(['player_id'], player)
-            cur.execute('''
-                SELECT gsis_id, drive_id, play_id, player_id
-                FROM play_player %s
-            ''' % (_prefix_and(_pk_play(cur, ids), player_pks)))
-
-            pset = _play_set(ids)
-            game, drive, play = IdSet.empty(), IdSet.empty(), IdSet.empty()
-            player = IdSet.empty()
-            for row in cur.fetchall():
-                pid = (row[0], row[1], row[2])
-                if not _in_play_set(pset, pid):
-                    continue
-                game.add(row[0])
-                drive.add(pid[0:2])
-                play.add(pid)
-                player.add(row[3])
-            return {'game': game, 'drive': drive, 'play': play,
-                    'player': player}
-
-        with Tx(self._db, factory=tuple_cursor) as cur:
-            def pkin(pkeys, ids, prefix=''):
-                return _sql_pkey_in(cur, pkeys, ids, prefix=prefix)
-
-            def where(table):
-                return self._sql_where(cur, [table])
-
-            def should_search(table):
-                tabtype = table_types[table]
-                return where(table) or sorter.is_restraining(tabtype)
-
-            if tables is None:
-                tables = self._tables()
-
-            # Start with games since it has the smallest space.
-            if should_search('game'):
-                merge(ids_game(cur))
-            if should_search('drive'):
-                merge(ids_drive(cur))
-            if should_search('play'):
-                merge(ids_play(cur))
-            if should_search('play_player'):
-                merge(ids_play_player(cur))
-            if should_search('player') or as_table == 'player':
-                merge(ids_player(cur))
-        return ids
+            return Condition._disjunctions(
+                cursor, [self._andalso] + [[c] for c in self._orelse],
+                aliases=aliases, aggregate=aggregate)
 
 
 class Sorter (object):
     """
     A representation of sort, order and limit criteria that can
-    be applied in a SQL query or to a Python sequence.
+    be applied in a SQL query.
     """
     @staticmethod
     def _normalize_order(order):
@@ -1314,38 +988,7 @@ class Sorter (object):
         assert order in ('ASC', 'DESC'), 'order must be "asc" or "desc"'
         return order
 
-    @staticmethod
-    def cmp_to_key(mycmp):  # Taken from Python 2.7's functools
-        """Convert a cmp= function into a key= function"""
-        class K(object):
-            __slots__ = ['obj']
-
-            def __init__(self, obj, *args):
-                self.obj = obj
-
-            def __lt__(self, other):
-                return mycmp(self.obj, other.obj) < 0
-
-            def __gt__(self, other):
-                return mycmp(self.obj, other.obj) > 0
-
-            def __eq__(self, other):
-                return mycmp(self.obj, other.obj) == 0
-
-            def __le__(self, other):
-                return mycmp(self.obj, other.obj) <= 0
-
-            def __ge__(self, other):
-                return mycmp(self.obj, other.obj) >= 0
-
-            def __ne__(self, other):
-                return mycmp(self.obj, other.obj) != 0
-
-            def __hash__(self):
-                raise TypeError('hash not implemented')
-        return K
-
-    def __init__(self, exprs=None, limit=None, restraining=[]):
+    def __init__(self, exprs=None, limit=None):
         def normal_expr(e):
             if isinstance(e, strtype):
                 return (e, 'DESC')
@@ -1359,31 +1002,13 @@ class Sorter (object):
 
         self.limit = int(limit or 0)
         self.exprs = []
-        self.restraining = restraining
         if exprs is not None:
             if isinstance(exprs, strtype) or isinstance(exprs, tuple):
                 self.exprs = [normal_expr(exprs)]
             else:
                 self.exprs = map(normal_expr, exprs)
 
-    def sorted(self, xs):
-        """
-        Sorts an iterable `xs` according to the criteria in `self`.
-
-        If there are no sorting criteria specified, then this is
-        equivalent to the identity function.
-        """
-        key = Sorter.cmp_to_key(self._cmp)
-        if len(self.exprs) > 0:
-            if self.limit > 0:
-                xs = heapq.nsmallest(self.limit, xs, key=key)
-            else:
-                xs = sorted(xs, key=key)
-        elif self.limit > 0:
-            xs = xs[:self.limit]
-        return xs
-
-    def sql(self, tabtype, only_limit=False, prefix=None):
+    def sql(self, entity, only_limit=False, aliases=None):
         """
         Return a SQL `ORDER BY ... LIMIT` expression corresponding to
         the criteria in `self`. If there are no ordering expressions
@@ -1406,109 +1031,14 @@ class Sorter (object):
         if only_limit and self.limit < 1:
             return ''
 
-        exprs = self.exprs
-        if tabtype is not None:
-            exprs = [(f, o) for f, o in exprs if f in tabtype._sql_fields]
+        fields = entity._sql_fields()
+        exprs = [(f, o) for f, o in self.exprs if f in fields]
         if len(exprs) == 0:
             return ''
 
-        as_sql = lambda f: tabtype._as_sql(f, prefix=prefix)
+        as_sql = lambda f: entity._sql_field(f, aliases=aliases)
         s = ' ORDER BY '
         s += ', '.join('%s %s' % (as_sql(f), o) for f, o in exprs)
         if self.limit > 0:
             s += ' LIMIT %d' % self.limit
         return s
-
-    def is_restraining(self, tabtype):
-        """
-        Returns `True` if and only if there exist sorting criteria
-        *with* a limit that correspond to fields in the given table
-        type.
-        """
-        if self.limit < 1:
-            return False
-        if tabtype not in self.restraining:
-            return False
-        if tabtype is types.PlayPlayer:
-            # This is a terrible hack. We don't want `play_player` restraining
-            # things unless the sort is by a play_player specific field.
-            fields = set(['player_id', 'team']
-                         + types._player_categories.keys())
-        else:
-            fields = set(tabtype._sql_fields)
-        for field, _ in self.exprs:
-            if field in fields:
-                return True
-        return False
-
-    def _cmp(self, a, b):
-        compare, geta = cmp, getattr
-        for field, order in self.exprs:
-            x, y = geta(a, field, None), geta(b, field, None)
-            if x is None or y is None:
-                continue
-            c = compare(x, y)
-            if order == 'DESC':
-                c *= -1
-            if c != 0:
-                return c
-        return 0
-
-
-class IdSet (object):
-    """
-    An incomplete wrapper for Python sets to represent collections
-    of identifier sets. Namely, this allows for a set to be "full"
-    so that every membership test returns `True` without actually
-    storing every identifier.
-    """
-    @staticmethod
-    def full():
-        return IdSet(None)
-
-    @staticmethod
-    def empty():
-        return IdSet([])
-
-    def __init__(self, seq):
-        if seq is None:
-            self._set = None
-        else:
-            self._set = set(seq)
-
-    @property
-    def is_full(self):
-        return self._set is None
-
-    def add(self, x):
-        if self._set is None:
-            self._set = set()
-        self._set.add(x)
-
-    def intersection(self, s2):
-        """
-        Returns the intersection of two id sets, where either can be
-        full.  Note that `s2` **must** be a `IdSet`, which differs from
-        the standard library `set.intersection` function which can
-        accept arbitrary sequences.
-        """
-        s1 = self
-        if s1.is_full:
-            return s2
-        if s2.is_full:
-            return s1
-        return IdSet(s1._set.intersection(s2._set))
-
-    def __contains__(self, x):
-        if self.is_full:
-            return True
-        return x in self._set
-
-    def __iter__(self):
-        assert not self.is_full, 'cannot iterate on full set'
-        return iter(self._set)
-
-    def __len__(self):
-        if self.is_full:
-            return sys.maxint  # WTF? Maybe this should be an assert error?
-        return len(self._set)
