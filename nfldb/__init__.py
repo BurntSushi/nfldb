@@ -66,7 +66,7 @@ from nfldb.query import aggregate, current, guess_position, player_search
 from nfldb.query import Query, QueryOR
 from nfldb.team import standard_team
 from nfldb.types import __pdoc__ as __types_pdoc__
-from nfldb.types import select_columns, stat_categories
+from nfldb.types import stat_categories
 from nfldb.types import Category, Clock, Enums, Drive, FieldPosition, Game
 from nfldb.types import Play, Player, PlayPlayer, PossessionTime, Team
 from nfldb.version import __pdoc__ as __version_pdoc__

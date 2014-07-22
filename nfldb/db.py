@@ -15,12 +15,9 @@ import pytz
 
 import nfldb.team
 
-_SHOW_QUERIES = False
-"""When set, all queries will be printed to stderr."""
-
 __pdoc__ = {}
 
-api_version = 6
+api_version = 7
 __pdoc__['api_version'] = \
     """
     The schema version that this library corresponds to. When the schema
@@ -28,6 +25,15 @@ __pdoc__['api_version'] = \
     automatically update the schema to the latest version before doing
     anything else.
     """
+
+_SHOW_QUERIES = False
+"""When set, all queries will be printed to stderr."""
+
+_NUM_QUERIES = 0
+"""
+The total number of queries executed. Only updated when _SHOW_QUERIES
+is true.
+"""
 
 _config_home = os.getenv('XDG_CONFIG_HOME')
 if not _config_home:
@@ -294,6 +300,9 @@ class Tx (object):
         if _SHOW_QUERIES:
             class _ (object):
                 def execute(self, *args, **kwargs):
+                    global _NUM_QUERIES
+
+                    _NUM_QUERIES += 1
                     c.execute(*args, **kwargs)
                     print(c.query, file=sys.stderr, end='\n\n')
 
@@ -785,4 +794,111 @@ def _migrate_6(c):
             CHECK (week >= 0 AND week <= 25);
         ALTER TABLE game ADD CONSTRAINT game_week_check
             CHECK (week >= 0 AND week <= 25);
+    ''')
+
+def _migrate_7(c):
+    from nfldb.types import _player_categories
+
+    print('''
+MIGRATING DATABASE... PLEASE WAIT
+
+THIS WILL ONLY HAPPEN ONCE.
+
+This is currently adding a play aggregation table (a materialized view) derived
+from the `play` and `play_player` tables. Depending on your machine, this 
+should take less than two minutes (this includes aggregating the data and 
+adding indexes).
+
+This aggregation table will automatically update itself when data is added or
+changed.
+''', file=sys.stderr)
+
+    c.execute('''
+        CREATE TABLE agg_play (
+            gsis_id gameid NOT NULL,
+            drive_id usmallint NOT NULL,
+            play_id usmallint NOT NULL,
+            %s,
+            PRIMARY KEY (gsis_id, drive_id, play_id),
+            FOREIGN KEY (gsis_id, drive_id, play_id)
+                REFERENCES play (gsis_id, drive_id, play_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (gsis_id, drive_id)
+                REFERENCES drive (gsis_id, drive_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (gsis_id)
+                REFERENCES game (gsis_id)
+                ON DELETE CASCADE
+        )
+    ''' % ', '.join(cat._sql_field for cat in _player_categories.values()))
+    select = ['play.gsis_id', 'play.drive_id', 'play.play_id'] \
+             + ['COALESCE(SUM(play_player.%s), 0)' % cat.category_id
+                for cat in _player_categories.values()]
+    c.execute('''
+        INSERT INTO agg_play
+        SELECT {select}
+        FROM play
+        LEFT JOIN play_player
+        ON (play.gsis_id, play.drive_id, play.play_id)
+           = (play_player.gsis_id, play_player.drive_id, play_player.play_id)
+        GROUP BY play.gsis_id, play.drive_id, play.play_id
+    '''.format(select=', '.join(select)))
+
+    print('Aggregation complete. Adding indexes...', file=sys.stderr)
+    c.execute('''
+        CREATE INDEX agg_play_in_gsis_id
+            ON agg_play (gsis_id ASC);
+        CREATE INDEX agg_play_in_gsis_drive_id
+            ON agg_play (gsis_id ASC, drive_id ASC);
+    ''')
+    for cat in _player_categories.values():
+        c.execute('CREATE INDEX agg_play_in_%s ON agg_play (%s ASC)'
+                  % (cat, cat))
+
+    print('Indexing complete. Adding triggers...', file=sys.stderr)
+    c.execute('''
+        CREATE FUNCTION agg_play_insert() RETURNS trigger AS $$
+            BEGIN
+                INSERT INTO
+                    agg_play (gsis_id, drive_id, play_id)
+                    VALUES   (NEW.gsis_id, NEW.drive_id, NEW.play_id);
+                RETURN NULL;
+            END;
+        $$ LANGUAGE 'plpgsql';
+    ''')
+    c.execute('''
+        CREATE TRIGGER agg_play_sync_insert
+        AFTER INSERT ON play
+        FOR EACH ROW EXECUTE PROCEDURE agg_play_insert();
+    ''')
+
+    def make_sum(field):
+        return 'COALESCE(SUM(play_player.{f}), 0) AS {f}'.format(f=field)
+    select = [make_sum(f.category_id) for f in _player_categories.values()]
+    set_columns = ['{f} = s.{f}'.format(f=f.category_id)
+                   for f in _player_categories.values()]
+    c.execute('''
+        CREATE FUNCTION agg_play_update() RETURNS trigger AS $$
+            BEGIN
+                UPDATE agg_play SET {set_columns}
+                FROM (
+                    SELECT {select}
+                    FROM play
+                    LEFT JOIN play_player
+                    ON (play.gsis_id, play.drive_id, play.play_id)
+                       = (play_player.gsis_id, play_player.drive_id,
+                          play_player.play_id)
+                    WHERE (play.gsis_id, play.drive_id, play.play_id)
+                          = (NEW.gsis_id, NEW.drive_id, NEW.play_id)
+                ) s
+                WHERE (agg_play.gsis_id, agg_play.drive_id, agg_play.play_id)
+                      = (NEW.gsis_id, NEW.drive_id, NEW.play_id);
+                RETURN NULL;
+            END;
+        $$ LANGUAGE 'plpgsql';
+    '''.format(set_columns=', '.join(set_columns), select=', '.join(select)))
+    c.execute('''
+        CREATE TRIGGER agg_play_sync_update
+        AFTER INSERT OR UPDATE ON play_player
+        FOR EACH ROW EXECUTE PROCEDURE agg_play_update();
     ''')
