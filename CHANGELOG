@@ -1,3 +1,63 @@
+0.2.0
+=====
+Materialized view for `play`. `Query` demolition.
+    
+ATTN: This introduces a breaking change. The `team` field can no longer
+be used in the `play` method. Instead, you should use the new
+`play_player` method to select individual player statistics belonging to
+a specific team.
+
+Otherwise, there are very few public facing changes, but the entire
+guts of `nfldb.Query` have been ripped out and replaced with more
+robust SQL generation code. Moreover, several idiosyncracies have been
+fixed and some unit tests have finally been added.
+
+1. Previously, the `Query` class was doing some very clever things to do
+   parts of a JOIN in Python code. The general flow was that filtering
+   was applied to find primary keys---never using any JOINs---and once
+   all criteria had been applied, those ids were used in a simple SELECT
+   to fetch the actual rows.
+
+   Now all of that cruft has been removed and replaced with intelligent
+   SQL generation that constructs one query with all the proper JOINs.
+   For whatever reason, I thought this was slower when experimenting
+   with it when I first started nfldb. Perhaps my indexes weren't
+   configured properly then. In any case, I can't really see much
+   performance difference.
+
+2. The SQL generation code is very smart. Although it is not part of
+   nfldb's public API, I imagine it would be very useful if you had some
+   special needs. See the unexported but documented `nfldb.sql` module.
+
+3. Many idiosyncracies resulting from doing a join in Python are now
+   completely gone. For example, if you tried to apply a `sort` with a
+   `limit` with complex search criteria, you were bound to get wrong
+   answers. For example, if you tried sorting by both a column on the
+   `week` table (like `down`) and a column on `play_player` (like
+   `passing_tds`) and applied a limit to it, the results would be
+   completely wonky because the pure Python join can't cope with it
+   performantly. A regular SQL join? Piece of cake.
+
+4. I have added a materialized view `agg_play`. This is a fancy word for
+   "a table that automatically updates itself." In essence, whenever a
+   new row is added to `play_player`, aggregate statistics for that play
+   are re-computed. This makes adding data slower (which doesn't happen
+   very frequently), but it makes querying data much faster and easier.
+   For example, plays can be queried for `passing_yds` without ever
+   joining with `play_player`. (Which is wonky because of the
+   one-to-many relationship.)
+   To reflect this clearer separation of concerns, the `Query.play`
+   method will no longer add criteria that hits the `play_player` table.
+   Instead, if you really want the `play_player` table, then you can use
+   the new `play_player` method. The only field that was accepted in the
+   `play` that is no longer allowed is the `team` and `player_id`
+   fields. This is because there is no sensible way to aggregate these
+   values into a single play.
+
+   To the best of my knowledge, that is the only possible breaking
+   change here.
+
+
 0.1.6
 =====
   - Add better error message when config file can't be found.
