@@ -40,7 +40,8 @@ dev-install:
 	pip install -U dist/*.tar.gz
 
 pep8:
-	pep8-python2 nfldb/{__init__,db,query,types,version}.py
+	pep8-python2 nfldb/{__init__,db,query,sql,team,types,version}.py
+	pep8-python2 tests/test_{query,sql}.py
 	pep8-python2 scripts/{nfldb-update,nfldb-write-erd}
 
 push:

@@ -3,7 +3,6 @@ import re
 import pytest
 
 
-
 def join(ent_from, *ent_tos):
     return ent_from._sql_join_all(ent_tos)
 
@@ -49,6 +48,7 @@ def test_joins():
     joins_to(PlayPlayer, Game, Drive)
     joins_to(PlayPlayer, Game, Drive, Play)
     joins_to(PlayPlayer, Game, Drive, Play, Player)
+
 
 def test_player_joins():
     from nfldb.types import *  # o_0

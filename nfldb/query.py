@@ -150,7 +150,7 @@ def player_search(db, full_name, team=None, position=None,
             qposition = cursor.mogrify('position = %s', (position,))
 
         fuzzy_filled = cursor.mogrify(fuzzy, (full_name,))
-        columns = types.Player._sql_select_fields(types.Player._sql_fields());
+        columns = types.Player._sql_select_fields(types.Player._sql_fields())
         columns.append('%s AS distance' % fuzzy_filled)
         q = q.format(
             columns=', '.join(columns),
@@ -901,7 +901,7 @@ class Query (Condition):
                 joins += types.PlayPlayer._sql_join_to_all(ent)
 
             sum_fields = types._player_categories.keys() \
-                         + types.PlayPlayer._sql_tables['derived']
+                + types.PlayPlayer._sql_tables['derived']
             select_sum_fields = types.PlayPlayer._sql_select_fields(
                 sum_fields, wrap=lambda f: 'SUM(%s)' % f)
             where = self._sql_where(cur)

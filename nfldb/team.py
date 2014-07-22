@@ -47,8 +47,6 @@ def standard_team(team):
     """
     if not team or team.lower == 'new york':
         return 'UNK'
-    # assert team.lower() != 'new york', \ 
-           # 'Cannot resolve "New York" as a team. Ambiguous.' 
 
     team = team.lower()
     for variants in teams:

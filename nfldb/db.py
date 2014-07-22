@@ -796,6 +796,7 @@ def _migrate_6(c):
             CHECK (week >= 0 AND week <= 25);
     ''')
 
+
 def _migrate_7(c):
     from nfldb.types import _player_categories
 
@@ -805,8 +806,8 @@ MIGRATING DATABASE... PLEASE WAIT
 THIS WILL ONLY HAPPEN ONCE.
 
 This is currently adding a play aggregation table (a materialized view) derived
-from the `play` and `play_player` tables. Depending on your machine, this 
-should take less than two minutes (this includes aggregating the data and 
+from the `play` and `play_player` tables. Depending on your machine, this
+should take less than two minutes (this includes aggregating the data and
 adding indexes).
 
 This aggregation table will automatically update itself when data is added or
@@ -832,8 +833,8 @@ changed.
         )
     ''' % ', '.join(cat._sql_field for cat in _player_categories.values()))
     select = ['play.gsis_id', 'play.drive_id', 'play.play_id'] \
-             + ['COALESCE(SUM(play_player.%s), 0)' % cat.category_id
-                for cat in _player_categories.values()]
+        + ['COALESCE(SUM(play_player.%s), 0)' % cat.category_id
+           for cat in _player_categories.values()]
     c.execute('''
         INSERT INTO agg_play
         SELECT {select}

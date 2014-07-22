@@ -2,6 +2,7 @@ from __future__ import absolute_import, division, print_function
 
 from nfldb.db import _upsert
 
+
 class Entity (object):
     """
     This is an abstract base class that handles most of the SQL
@@ -26,7 +27,7 @@ class Entity (object):
     """
     A dictionary with four keys: `primary`, `tables`, `managed` and
     `derived`.
-    
+
     The `primary` key should map to a list of primary key
     fields that correspond to a shared minimal subset of primary keys
     in all tables that represent this entity. (i.e., It should be the
@@ -120,7 +121,7 @@ class Entity (object):
 
         If `wrap` is a not `None`, then it is applied to the result
         of calling `cls._sql_field` on each element in `fields`.
-        
+
         All resulting fields are aliased with `AS` to correspond to
         the name given in `fields`. Namely, this makes table aliases
         opaque to the resulting query, but this also disallows
@@ -166,13 +167,17 @@ class Entity (object):
         """
         assert cls_from not in cls_tos, \
             'cannot join %s with itself with `sql_join_all`' % cls_from
+
         def dist(f, t):
             return f._sql_relation_distance(t)
+
         def relation_dists(froms, tos):
             return filter(lambda (f, t, d): d is not None,
                           ((f, t, dist(f, t)) for f in froms for t in tos))
+
         def more_general(froms, tos):
             return filter(lambda (f, t, d): d < 0, relation_dists(froms, tos))
+
         def more_specific(froms, tos):
             return filter(lambda (f, t, d): d > 0, relation_dists(froms, tos))
 
@@ -199,7 +204,7 @@ class Entity (object):
 
     @classmethod
     def _sql_join_to_all(cls_from, cls_to, from_table=None,
-                        from_aliases=None, to_aliases=None):
+                         from_aliases=None, to_aliases=None):
         """
         Given a **sub class** `cls_to` of `nfldb.Entity`, produce
         as many SQL `LEFT JOIN` clauses as is necessary so that all
@@ -224,8 +229,8 @@ class Entity (object):
 
     @classmethod
     def _sql_join_to(cls_from, cls_to,
-                    from_table=None, to_table=None,
-                    from_aliases=None, to_aliases=None):
+                     from_table=None, to_table=None,
+                     from_aliases=None, to_aliases=None):
         """
         Given a **sub class** `cls_to` of `nfldb.Entity`, produce
         a SQL `LEFT JOIN` clause.
@@ -255,7 +260,7 @@ class Entity (object):
         common = [k for k in from_pkey if k in to_pkey]
         assert len(common) > 0, \
             "Cannot join %s to %s with non-overlapping primary keys." \
-                % (cls_from.__name__, cls_to.__name__)
+            % (cls_from.__name__, cls_to.__name__)
         fkey = [qualified_field(from_table, f) for f in common]
         tkey = [qualified_field(as_to_table, f) for f in common]
         return '''

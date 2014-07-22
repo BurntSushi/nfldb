@@ -1151,7 +1151,7 @@ class PlayPlayer (SQLPlayPlayer):
     this class.
     """
     __slots__ = SQLPlayPlayer._sql_fields() \
-                + ['_db', '_play', '_player', 'fields']
+        + ['_db', '_play', '_player', 'fields']
 
     # Document instance variables for derived SQL fields.
     # We hide them from the public interface, but make the doco
@@ -1418,7 +1418,7 @@ class SQLPlay (sql.Entity):
         'tables': [
             ('play', ['time', 'pos_team', 'yardline', 'down', 'yards_to_go',
                       'description', 'note', 'time_inserted', 'time_updated',
-                     ] + _play_categories.keys()),
+                      ] + _play_categories.keys()),
             ('agg_play', _player_categories.keys()),
         ],
         'derived': ['offense_yds', 'offense_tds', 'defense_tds', 'points'],
