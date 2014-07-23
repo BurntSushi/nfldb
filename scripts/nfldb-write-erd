@@ -32,7 +32,8 @@ template_entity = '''
 
 template_column = '  {pk}{fk}{column} {{label: "{type}"}}'
 
-tables = ['player', 'team', 'game', 'drive', 'play', 'play_player', 'meta']
+tables = ['meta', 'player', 'team', 'game', 'drive',
+          'play', 'agg_play', 'play_player']
 
 condense_whitelist = {
     'player': ['player_id', 'full_name', 'team', 'position', 'status'],
@@ -43,13 +44,15 @@ condense_whitelist = {
               'end_time', 'pos_team', 'pos_time'],
     'play': ['gsis_id', 'drive_id', 'play_id', 'time', 'pos_team', 'yardline',
              'down', 'yards_to_go'],
+    'agg_play': ['gsis_id', 'drive_id', 'play_id'],
     'play_player': ['gsis_id', 'drive_id', 'play_id', 'player_id', 'team'],
     'meta': ['version', 'season_type', 'season_year', 'week'],
 }
 
 colors = {
     'player': '#d0e0d0', 'team': '#d0e0d0', 'meta': '#fcecec',
-    'game': '#ececfc', 'drive': '#ececfc', 'play': '#ececfc',
+    'game': '#ececfc', 'drive': '#ececfc',
+    'play': '#ececfc', 'agg_play': '#ececfc',
     'play_player': '#ececfc',
 }
 
@@ -136,6 +139,7 @@ drive       1--* play
 drive       1--* play_player
 
 play        1--* play_player
+agg_play    1--1 play
 
 player      1--* play_player
 '''
