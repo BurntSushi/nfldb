@@ -874,23 +874,6 @@ class Query (Condition):
         If any sorting criteria is specified, it is applied to the
         aggregate *player* values only.
         """
-        # The central approach here is to buck the trend of the other
-        # `as_*` methods and do a JOIN to perform our search.
-        # We do this because `IN` expressions are limited in the number
-        # of sub-expressions they can contain, and since we can't do our
-        # usual post-filtering with Python (since it's an aggregate),
-        # we must resort to doing all the filtering in PostgreSQL.
-        #
-        # The only other option I can think of is to load the identifiers
-        # into a temporary table and use a subquery with an `IN` expression,
-        # which I'm told isn't subject to the normal limitations. However,
-        # I'm not sure if it's economical to run a query against a big
-        # table with so many `OR` expressions. More convincingly, the
-        # approach I've used below seems to be *fast enough*.
-        #
-        # Ideas and experiments are welcome. Using a join seems like the
-        # most sensible approach at the moment (and it's simple!), but I'd like
-        # to experiment with other ideas in the future.
         joins = ''
         results = []
 
