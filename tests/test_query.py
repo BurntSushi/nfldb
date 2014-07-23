@@ -142,3 +142,9 @@ def test_play_team(qgame):
     # or the `play_player` table.
     with pytest.raises(AssertionError):
         qgame.play(team='NE')
+
+
+def test_play_filter_sort_bad_key(q):
+    q.game(gsis_id='2013090807')
+    q.sort(('down', 'asc')).limit(20)
+    q.as_plays(fill=True)

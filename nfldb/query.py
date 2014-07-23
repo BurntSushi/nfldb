@@ -698,7 +698,7 @@ class Query (Condition):
         _append_conds(self._agg_default_cond, types.PlayPlayer, kw)
         return self
 
-    def _make_join_query(self, cursor, entity, only_prim=False):
+    def _make_join_query(self, cursor, entity, only_prim=False, sorter=None):
         entities = self._entities()
         entities.discard(entity)
 
@@ -715,12 +715,14 @@ class Query (Condition):
         fields = None
         if only_prim:
             fields = entity._sql_tables['primary']
+        if sorter is None:
+            sorter = self._sorter
         args = {
             'select_from': entity._sql_select_from(fields=fields),
             'joins': entity._sql_join_all(entities),
             'where': sql.ands(self._sql_where(cursor)),
             'groupby': '',
-            'sortby': self._sorter.sql(entity),
+            'sortby': sorter.sql(entity),
         }
 
         # We need a GROUP BY if we're joining with a table that has more
@@ -785,11 +787,27 @@ class Query (Condition):
 
         self._assert_no_aggregate()
 
+        # This is pretty terrifying.
+        # Apparently PostgreSQL can change the order of rows returned
+        # depending on the columns selected. So e.g., if you sort by `down`
+        # and limit to 20 results, you might get a different 20 plays if
+        # you change which columns you're selecting.
+        # This is pertinent here because if we're filling plays with player
+        # statistics, then we are assuming that this order never changes.
+        # To make the ordering consistent, we add the play's primary key to
+        # the existing sort criteria, which guarantees that the sort will
+        # always be the same.
+        # (We are careful not to override the user specified
+        # `self._sort_exprs`.
+        consistent = [(c, 'asc') for c in ['gsis_id', 'drive_id', 'play_id']]
+        sorter = Sorter(self._sort_exprs, self._limit)
+        sorter.exprs += consistent
+
         if not fill:
             results = []
             with Tx(self._db, factory=tuple_cursor) as cursor:
                 init = types.Play._from_tuple
-                q = self._make_join_query(cursor, types.Play)
+                q = self._make_join_query(cursor, types.Play, sorter=sorter)
                 cursor.execute(q)
                 for row in cursor.fetchall():
                     results.append(init(self._db, row))
@@ -798,7 +816,7 @@ class Query (Condition):
             plays = OrderedDict()
             with Tx(self._db, factory=tuple_cursor) as cursor:
                 init_play = types.Play._from_tuple
-                q = self._make_join_query(cursor, types.Play)
+                q = self._make_join_query(cursor, types.Play, sorter=sorter)
                 cursor.execute(q)
                 for row in cursor.fetchall():
                     play = init_play(self._db, row)
@@ -808,7 +826,8 @@ class Query (Condition):
                 # Run the above query *again* as a subquery.
                 # This time, only fetch the primary key, and use that to
                 # fetch all the `play_player` records in one swoop.
-                ids = self._make_join_query(cursor, types.Play, only_prim=True)
+                ids = self._make_join_query(cursor, types.Play,
+                                            only_prim=True, sorter=sorter)
                 select_from = types.PlayPlayer._sql_select_from(
                     aliases={'play_player': 'pp'})
                 q = '''
