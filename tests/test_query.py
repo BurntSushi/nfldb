@@ -26,6 +26,10 @@ def test_num_games_in_week(q):
     assert len(q.game(week=1).as_games()) == 16
 
 
+def test_game_by_team(q):
+    q.game(team='NE', week=1)
+    assert q.as_games()[0].gsis_id == '2013090800'
+
 def test_games_from_player(q):
     q.player(full_name='Tom Brady')
     assert len(q.as_games()) == 16

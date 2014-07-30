@@ -583,10 +583,11 @@ class Query (Condition):
         [open an issue](https://github.com/BurntSushi/nfldb/issues/new)
         if you can think of other special fields to add.
         """
-        _append_conds(self._default_cond, types.Game, kw)
         if 'team' in kw:
-            ors = {'home_team': kw['team'], 'away_team': kw['team']}
+            team = kw.pop('team')
+            ors = {'home_team': team, 'away_team': team}
             self.andalso(Query(self._db, orelse=True).game(**ors))
+        _append_conds(self._default_cond, types.Game, kw)
         return self
 
     def drive(self, **kw):
