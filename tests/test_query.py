@@ -90,7 +90,7 @@ def test_clock(q):
 def test_possession_time(q):
     long_drive = nfldb.PossessionTime.from_str('10:00')
     q.drive(pos_time__ge=long_drive)
-    assert len(q.as_drives()) == 2
+    assert len(q.as_drives()) == 1
 
 
 def test_field_position(q):
