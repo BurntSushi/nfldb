@@ -30,6 +30,13 @@ def test_game_by_team(q):
     q.game(team='NE', week=1)
     assert q.as_games()[0].gsis_id == '2013090800'
 
+
+def test_limit_no_sort(q):
+    q.game(season_year=2013, season_type='Regular', week=1)
+    q.limit(1)
+    assert len(q.as_games()) == 1
+
+
 def test_games_from_player(q):
     q.player(full_name='Tom Brady')
     assert len(q.as_games()) == 16

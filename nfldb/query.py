@@ -1011,7 +1011,7 @@ class Sorter (object):
             else:
                 self.exprs = map(normal_expr, exprs)
 
-    def sql(self, entity, only_limit=False, aliases=None):
+    def sql(self, entity, aliases=None):
         """
         Return a SQL `ORDER BY ... LIMIT` expression corresponding to
         the criteria in `self`. If there are no ordering expressions
@@ -1022,21 +1022,14 @@ class Sorter (object):
         If `fields` is specified, then only SQL columns in the sequence
         are used in the ORDER BY expression.
 
-        If `only_limit` is `True`, then a SQL expression will only be
-        returned if there is a limit of at least `1` specified in the
-        sorting criteria. This is useful when an `ORDER BY` is only
-        used to limit the results rather than influence an ordering
-        returned to a client.
-
         The value of `prefix` is passed to the `tabtype._as_sql`
         function.
         """
-        if only_limit and self.limit < 1:
-            return ''
-
         fields = entity._sql_fields()
         exprs = [(f, o) for f, o in self.exprs if f in fields]
         if len(exprs) == 0:
+            if self.limit > 0:
+                return ' LIMIT %d' % self.limit
             return ''
 
         as_sql = lambda f: entity._sql_field(f, aliases=aliases)
