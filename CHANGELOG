@@ -1,3 +1,10 @@
+0.2.2
+=====
+- Fixes #39 and #42.
+- Fixes another bug where LIMIT clauses weren't being inserted by
+  `nfldb.Query` if there were no sorting criteria.
+
+
 0.2.1
 =====
 - Fixes #34.
