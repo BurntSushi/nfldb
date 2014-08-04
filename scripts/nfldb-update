@@ -40,6 +40,16 @@ def now():
     return datetime.datetime.now()
 
 
+def seconds_delta(d):
+    """
+    The same as `datetime.timedelta.total_seconds` in the standard
+    library. Defined here for Python 2.6 compatibility.
+
+    `d` should be a `datetime.timedelta` object.
+    """
+    return (d.microseconds + (d.seconds + d.days * 24 * 3600) * 10**6) / 10**6
+
+
 def game_from_id(cursor, gsis_id):
     """
     Returns an `nfldb.Game` object given its GSIS identifier.
@@ -49,7 +59,7 @@ def game_from_id(cursor, gsis_id):
     """
     schedule = nflgame.sched.games[gsis_id]
     start_time = nfldb.types._nflgame_start_time(schedule)
-    if (start_time - nfldb.now()).total_seconds() >= 900:
+    if seconds_delta(start_time - nfldb.now()) >= 900:
         # Bail quickly if the game isn't close to starting yet.
         return game_from_schedule(cursor, gsis_id)
 
@@ -99,7 +109,7 @@ def update_players(cursor, interval):
     db = cursor.connection
     cursor.execute('SELECT last_roster_download FROM meta')
     last = cursor.fetchone()['last_roster_download']
-    update_due = (nfldb.now() - last).total_seconds() >= interval
+    update_due = seconds_delta(nfldb.now() - last) >= interval
     num_existing = nfldb.db._num_rows(cursor, 'player')
 
     # The interval only applies if the player table has data in it.
@@ -248,7 +258,7 @@ def games_scheduled(cursor):
         # So what's the point of bulk inserting? It's useful when updates are
         # done infrequently (like the initial load of the database or say,
         # once a week).
-        if (row['start_time'] - nfldb.now()).total_seconds() < 900:
+        if seconds_delta(row['start_time'] - nfldb.now()) < 900:
             scheduled.append(row['gsis_id'])
     return sorted(scheduled, key=int)
 
