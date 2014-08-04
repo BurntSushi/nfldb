@@ -1,3 +1,8 @@
+0.2.3
+=====
+- Fixes #41 (Python 2.6 compatibility).
+
+
 0.2.2
 =====
 - Fixes #39 and #42.
