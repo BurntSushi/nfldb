@@ -1347,9 +1347,9 @@ class PlayPlayer (SQLPlayPlayer):
         return Enums.player_pos.UNK
 
     def _save(self, cursor):
-        super(PlayPlayer, self)._save(cursor)
         if self._player is not None:
             self._player._save(cursor)
+        super(PlayPlayer, self)._save(cursor)
 
     def _add(self, b):
         """
