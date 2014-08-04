@@ -359,8 +359,6 @@ def update(db, player_interval=(60 * 60 * 12)):
         update_season_state(cursor)
         log('done.')
 
-        update_current_week_schedule(db)
-
         nada = games_missing(cursor)
         if len(nada) > 0:
             log('Adding schedule data for %d games... ' % len(nada), end='')
@@ -387,6 +385,13 @@ def update(db, player_interval=(60 * 60 * 12)):
                 log('\t%s' % g)
                 g._save(cursor)
             log('done.')
+
+        # This *must* come after everything else because it could set
+        # the 'finished' flag to true on a game that hasn't been completely
+        # updated yet.
+        #
+        # See issue #42.
+        update_current_week_schedule(db)
 
 
 def lock_tables(cursor):
