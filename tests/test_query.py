@@ -37,6 +37,12 @@ def test_limit_no_sort(q):
     assert len(q.as_games()) == 1
 
 
+def test_sort(q):
+    q.game(season_year=2013, season_type='Regular', week=1)
+    q.sort(('passing_yds', 'desc'))
+    assert '2013090500' == q.as_plays()[0].drive.game.gsis_id
+
+
 def test_games_from_player(q):
     q.player(full_name='Tom Brady')
     assert len(q.as_games()) == 16
@@ -144,6 +150,7 @@ def test_aggregate_limit(q):
 def test_aggregate_filter(q):
     pps = q.aggregate(fumbles_lost__ge=6).as_aggregate()
     assert len(pps) == 1
+    assert pps[0].player_id is not None
     assert pps[0].player.full_name == 'Peyton Manning'
 
 
@@ -155,7 +162,31 @@ def test_play_team(qgame):
         qgame.play(team='NE')
 
 
-def test_play_filter_sort_bad_key(q):
-    q.game(gsis_id='2013090807')
-    q.sort(('down', 'asc')).limit(20)
-    q.as_plays(fill=True)
+def test_fill_drive(db):
+    q = nfldb.Query(db)
+    q.drive(gsis_id='2013090800')
+    drives = q.as_drives()
+    nfldb.Drive.fill_games(db, drives)
+    for d in drives:
+        assert d._game is not None
+
+
+def test_fill_play(db):
+    q = nfldb.Query(db)
+    q.play(gsis_id='2013090800')
+    plays = q.as_plays()
+    nfldb.Play.fill_drives(db, plays)
+    for p in plays:
+        assert p._drive is not None
+        assert p._drive._game is not None
+
+
+def test_fill_play_player(db):
+    q = nfldb.Query(db)
+    q.play_player(gsis_id='2013090800')
+    pps = q.as_play_players()
+    nfldb.PlayPlayer.fill_plays(db, pps)
+    for pp in pps:
+        assert pp._play is not None
+        assert pp._play._drive is not None
+        assert pp._play._drive._game is not None

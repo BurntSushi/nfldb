@@ -124,17 +124,22 @@ def _next_play_with(plays, play, pred):
     return None
 
 
-def _as_row(fields, obj):
+def _fill(db, fill_with, to_fill, attr):
     """
-    Given a list of fields in a SQL table and a Python object, return
-    an association list where the keys are from `fields` and the values
-    are the result of `getattr(obj, fields[i], None)` for some `i`.
+    Fills a list of entities `to_fill` with the entity `fill_with`.
+    An instance of the appropriate `fill_with` entity is assigned
+    to the `attr` of `to_fill`.
+    """
+    pk = fill_with._sql_tables['primary']
+    def pkval(entobj):
+        return tuple(getattr(entobj, k) for k in pk)
 
-    Note that the `time_inserted` and `time_updated` fields are always
-    omitted.
-    """
-    exclude = ('time_inserted', 'time_updated')
-    return [(f, getattr(obj, f, None)) for f in fields if f not in exclude]
+    import nfldb.query
+    ids = list(set(pkval(obj) for obj in to_fill))
+    objs = nfldb.query._entities_by_ids(db, fill_with, *ids)
+    byid = dict([(pkval(obj), obj) for obj in objs])
+    for obj in to_fill:
+        setattr(obj, attr, byid[pkval(obj)])
 
 
 def _total_ordering(cls):
@@ -888,7 +893,7 @@ class Player (SQLPlayer):
     data is scraped from NFL.com's team roster pages (which invites
     infrequent uncertainty).
     """
-    __slots__ = SQLPlayer._sql_fields() + ['_db']
+    __slots__ = SQLPlayer.sql_fields() + ['_db']
 
     _existing = None
     """
@@ -903,33 +908,37 @@ class Player (SQLPlayer):
         Given `p` as a `nflgame.player.PlayPlayerStats` object,
         `_from_nflgame` converts `p` to a `nfldb.Player` object.
         """
-        meta = ['full_name', 'first_name', 'last_name', 'team', 'position',
-                'profile_id', 'profile_url', 'uniform_number', 'birthdate',
-                'college', 'height', 'weight', 'years_pro', 'status']
-        kwargs = {}
+        dbp = Player(db)
+        dbp.player_id = p.playerid
+        dbp.gsis_name = p.name
+
         if p.player is not None:
+            meta = ['full_name', 'first_name', 'last_name', 'team', 'position',
+                    'profile_id', 'profile_url', 'uniform_number', 'birthdate',
+                    'college', 'height', 'weight', 'years_pro', 'status']
             for k in meta:
                 v = getattr(p.player, k, '')
                 if not v:
+                    # Normalize all empty values to `None`
                     v = None
-                kwargs[k] = v
+                setattr(dbp, k, v)
 
             # Convert position and status values to an enumeration.
-            kwargs['position'] = getattr(Enums.player_pos,
-                                         kwargs['position'] or '',
-                                         Enums.player_pos.UNK)
+            dbp.position = getattr(Enums.player_pos,
+                                   dbp.position or '',
+                                   Enums.player_pos.UNK)
 
             trans = Enums._nflgame_player_status
-            kwargs['status'] = trans.get(kwargs['status'] or '',
-                                         Enums.player_status.Unknown)
+            dbp.status = trans.get(dbp.status or '',
+                                   Enums.player_status.Unknown)
 
-        if kwargs.get('position', None) is None:
-            kwargs['position'] = Enums.player_pos.UNK
-        if kwargs.get('status', None) is None:
-            kwargs['status'] = Enums.player_status.Unknown
+        if getattr(dbp, 'position', None) is None:
+            dbp.position = Enums.player_pos.UNK
+        if getattr(dbp, 'status', None) is None:
+            dbp.status = Enums.player_status.Unknown
 
-        kwargs['team'] = nfldb.team.standard_team(kwargs.get('team', ''))
-        return Player(db, p.playerid, p.name, **kwargs)
+        dbp.team = nfldb.team.standard_team(getattr(dbp, 'team', ''))
+        return dbp
 
     @staticmethod
     def _from_nflgame_player(db, p):
@@ -937,24 +946,15 @@ class Player (SQLPlayer):
         Given `p` as a `nflgame.player.Player` object,
         `_from_nflgame_player` converts `p` to a `nfldb.Player` object.
         """
+        # This hack translates `nflgame.player.Player` to something like
+        # a `nflgame.player.PlayPlayerStats` object that can be converted
+        # with `nfldb.Player._from_nflgame`.
         class _Player (object):
             def __init__(self):
                 self.playerid = p.player_id
                 self.name = p.gsis_name
                 self.player = p
         return Player._from_nflgame(db, _Player())
-
-    @staticmethod
-    def from_row(db, r):
-        """
-        Introduces a `nfldb.Player` object from a full SQL row from the
-        `player` table.
-        """
-        return Player(db, r['player_id'], r['gsis_name'], r['full_name'],
-                      r['first_name'], r['last_name'], r['team'],
-                      r['position'], r['profile_id'], r['profile_url'],
-                      r['uniform_number'], r['birthdate'], r['college'],
-                      r['height'], r['weight'], r['years_pro'], r['status'])
 
     @staticmethod
     def from_id(db, player_id):
@@ -972,79 +972,70 @@ class Player (SQLPlayer):
             return None
         return players[0]
 
-    def __init__(self, db, player_id, gsis_name, full_name=None,
-                 first_name=None, last_name=None, team=None, position=None,
-                 profile_id=None, profile_url=None, uniform_number=None,
-                 birthdate=None, college=None, height=None, weight=None,
-                 years_pro=None, status=None):
+    def __init__(self, db):
         """
-        Introduces a new `nfldb.Player` object with the given
-        attributes.
+        Creates a new and empty `nfldb.Player` object with the given
+        database connection.
 
-        A player object contains data known about a player as
-        person. Namely, this object is not responsible for containing
-        statistical data related to a player at some particular point
-        in time.
-
-        This constructor should probably not be used. Instead,
-        use the more convenient constructors `Player.from_row` or
-        `Player.from_id`. Alternatively, a `nfldb.Player` object can be
-        obtained from the `nfldb.PlayPlayer`.`nfldb.PlayPlayer.player`
-        attribute.
+        This constructor should not be used by clients. Instead, you
+        should get `nfldb.Player` objects from `nfldb.Query` or from
+        one of the other constructors, like `nfldb.Player.from_id` or
+        `nfldb.Player.from_row_dict`. (The latter is useful only if
+        you're writing your own SQL queries.)
         """
         self._db = db
 
-        self.player_id = player_id
+        self.player_id = None
         """
         The player_id linking this object `nfldb.PlayPlayer` object.
 
         N.B. This is the GSIS identifier string. It always has length
         10.
         """
-        self.gsis_name = gsis_name
+        self.gsis_name = None
         """
         The name of a player from the source GameCenter data. This
         field is guaranteed to contain a name.
         """
-        self.full_name = full_name
+        self.full_name = None
         """The full name of a player."""
-        self.first_name = first_name
+        self.first_name = None
         """The first name of a player."""
-        self.last_name = last_name
+        self.last_name = None
         """The last name of a player."""
-        self.team = team
+        self.team = None
         """
         The team that the player is currently active on. If the player
         is no longer playing or is a free agent, this value may
         correspond to the `UNK` (unknown) team.
         """
-        self.position = position
+        self.position = None
         """
         The current position of a player if it's available. This may
         be **not** be `None`. If the position is not known, then the
         `UNK` enum is used from `nfldb.Enums.player_pos`.
         """
-        self.profile_id = profile_id
+        self.profile_id = None
         """
         The profile identifier used on a player's canonical NFL.com
         profile page. This is used as a foreign key to connect varying
         sources of information.
         """
-        self.profile_url = profile_url
+        self.profile_url = None
         """The NFL.com profile URL for this player."""
-        self.uniform_number = uniform_number
+        self.uniform_number = None
         """A player's uniform number as an integer."""
-        self.birthdate = birthdate
+        self.birthdate = None
         """A player's birth date as a free-form string."""
-        self.college = college
+        self.college = None
         """A player's college as a free-form string."""
-        self.height = height
+        self.height = None
         """A player's height as a free-form string."""
-        self.weight = weight
+        self.weight = None
         """A player's weight as a free-form string."""
-        self.years_pro = years_pro
+        self.years_pro = None
         """The number of years a player has played as an integer."""
-        self.status = status
+        self.status = None
         """The current status of this player as a free-form string."""
 
     def _save(self, cursor):
@@ -1150,8 +1141,8 @@ class PlayPlayer (SQLPlayPlayer):
     wiki page. Each statistical field is an instance attribute in
     this class.
     """
-    __slots__ = SQLPlayPlayer._sql_fields() \
-        + ['_db', '_play', '_player', 'fields']
+    __slots__ = SQLPlayPlayer.sql_fields() \
+        + ['_db', '_play', '_player', '_fields']
 
     # Document instance variables for derived SQL fields.
     # We hide them from the public interface, but make the doco
@@ -1195,79 +1186,75 @@ class PlayPlayer (SQLPlayPlayer):
         `nflgame.player.PlayPlayerStats` object, `_from_nflgame`
         converts `pp` to a `nfldb.PlayPlayer` object.
         """
-        stats = {}
+        team = nfldb.team.standard_team(pp.team)
+
+        dbpp = PlayPlayer(db)
+        dbpp.gsis_id = p.gsis_id
+        dbpp.drive_id = p.drive_id
+        dbpp.play_id = p.play_id
+        dbpp.player_id = pp.playerid
+        dbpp.team = team
         for k in _player_categories.keys():
             if pp._stats.get(k, 0) != 0:
-                stats[k] = pp._stats[k]
+                setattr(dbpp, k, pp._stats[k])
 
-        team = nfldb.team.standard_team(pp.team)
-        play_player = PlayPlayer(db, p.gsis_id, p.drive_id, p.play_id,
-                                 pp.playerid, team, stats)
-        play_player._play = p
-        play_player._player = Player._from_nflgame(db, pp)
-        return play_player
-
-    @classmethod
-    def _from_tuple(cls, db, t):
-        """
-        Introduces a new `nfldb.PlayPlayer` object from a tuple SQL
-        result. This constructor exists for performance reasons and
-        is only used inside the `nfldb.Query` class. In particular,
-        the order of the fields in the originating SELECT query is
-        significant.
-        """
-        cols = cls._sql_fields()
-        stats = {}
-        for i, v in enumerate(t[5:], 5):
-            if v != 0:
-                stats[cols[i]] = v
-        return PlayPlayer(db, t[0], t[1], t[2], t[3], t[4], stats)
+        dbpp._play = p
+        dbpp._player = Player._from_nflgame(db, pp)
+        return dbpp
 
     @staticmethod
-    def from_row(db, row):
+    def fill_plays(db, play_players):
         """
-        Introduces a new `nfldb.PlayPlayer` object from a full SQL row
-        result from the `play_player` table.
+        Given a list of `play_players`, fill all of their `play` attributes
+        using as few queries as possible. This will also fill the
+        plays with drive data and each drive with game data.
         """
-        return PlayPlayer(db, row['gsis_id'], row['drive_id'],
-                          row['play_id'], row['player_id'], row['team'], row)
+        _fill(db, Play, play_players, '_play')
+        Play.fill_drives(db, [pp._play for pp in play_players])
+        Drive.fill_games(db, [pp._play._drive for pp in play_players])
 
-    def __init__(self, db, gsis_id, drive_id, play_id, player_id, team,
-                 stats):
+    @staticmethod
+    def fill_players(db, play_players):
         """
-        Introduces a new `nfldb.PlayPlayer` object with the given
-        attributes. `stats` should eb a dictionary mapping player
-        statistical categories in `nfldb.stat_categories` to their
-        corresponding values.
+        Given a list of `play_players`, fill all of their `player`
+        attributes using as few queries as possible.
+        """
+        _fill(db, Player, play_players, '_player')
 
-        This constructor should probably not be used. Instead, use
-        `nfldb.PlayPlayer.from_row`, or more conveniently, any of
-        the following `play_players` attributes:
-        `nfldb.Game`.`nfldb.Game.play_players`,
-        `nfldb.Drive`.`nfldb.Drive.play_players` or
-        `nfldb.Play`.`nfldb.Play.play_players`.
+    def __init__(self, db):
         """
+        Creates a new and empty `nfldb.PlayPlayer` object with the
+        given database connection.
+
+        This constructor should not be used by clients. Instead,
+        you should get `nfldb.PlayPlayer` objects
+        from `nfldb.Query` or from one of the other
+        constructors, like `nfldb.PlayPlayer.from_id` or
+        `nfldb.PlayPlayer.from_row_dict`. (The latter is useful only if
+        you're writing your own SQL queries.)
+        """
+        self._db = db
         self._play = None
         self._player = None
-        self._db = db
+        self._fields = None
 
-        self.gsis_id = gsis_id
+        self.gsis_id = None
         """
         The GSIS identifier for the game that this "play player"
         belongs to.
         """
-        self.drive_id = drive_id
+        self.drive_id = None
         """
         The numeric drive identifier for this "play player". It may be
         interpreted as a sequence number.
         """
-        self.play_id = play_id
+        self.play_id = None
         """
         The numeric play identifier for this "play player". It can
         typically be interpreted as a sequence number scoped to its
         corresponding game.
         """
-        self.player_id = player_id
+        self.player_id = None
         """
         The player_id linking these stats to a `nfldb.Player` object.
         Use `nfldb.PlayPlayer.player` to access player meta data.
@@ -1275,18 +1262,21 @@ class PlayPlayer (SQLPlayPlayer):
         N.B. This is the GSIS identifier string. It always has length
         10.
         """
-        self.team = team
+        self.team = None
         """
         The team that this player belonged to when he recorded the
         statistics in this play.
         """
-        self.fields = set()
-        """The set of non-zero statistical fields set."""
 
-        seta = setattr
-        for cat in stats:
-            seta(self, cat, stats[cat])
-            self.fields.add(cat)
+    @property
+    def fields(self):
+        """The set of non-zero statistical fields set."""
+        if self._fields is None:
+            self._fields = set()
+            for k in _player_categories.keys():
+                if getattr(self, k, 0) != 0:
+                    self._fields.add(k)
+        return self._fields
 
     @property
     def play(self):
@@ -1473,7 +1463,7 @@ class Play (SQLPlay):
     wiki page. Each statistical field is an instance attribute in
     this class.
     """
-    __slots__ = SQLPlay._sql_fields() + ['_db', '_drive', '_play_players']
+    __slots__ = SQLPlay.sql_fields() + ['_db', '_drive', '_play_players']
 
     # Document instance variables for derived SQL fields.
     # We hide them from the public interface, but make the doco
@@ -1517,11 +1507,6 @@ class Play (SQLPlay):
         `nflgame.game.Play` object, `_from_nflgame` converts `p` to a
         `nfldb.Play` object.
         """
-        stats = {}
-        for k in _play_categories.keys():
-            if p._stats.get(k, 0) != 0:
-                stats[k] = p._stats[k]
-
         # Fix up some fields so they meet the constraints of the schema.
         # The `time` field is cleaned up afterwards in
         # `nfldb.Drive._from_nflgame`, since it needs data about surrounding
@@ -1530,53 +1515,31 @@ class Play (SQLPlay):
         yardline = FieldPosition(getattr(p.yardline, 'offset', None))
         down = p.down if 1 <= p.down <= 4 else None
         team = p.team if p.team is not None and len(p.team) > 0 else 'UNK'
-        play = Play(db, d.gsis_id, d.drive_id, int(p.playid), time, team,
-                    yardline, down, p.yards_togo, p.desc, p.note,
-                    None, None, stats)
 
-        play._drive = d
-        play._play_players = []
+        dbplay = Play(db)
+        dbplay.gsis_id = d.gsis_id
+        dbplay.drive_id = d.drive_id
+        dbplay.play_id = int(p.playid)
+        dbplay.time = time
+        dbplay.pos_team = team
+        dbplay.yardline = yardline
+        dbplay.down = down
+        dbplay.yards_to_go = p.yards_togo
+        dbplay.description = p.desc
+        dbplay.note = p.note
+        for k in _play_categories.keys():
+            if p._stats.get(k, 0) != 0:
+                setattr(dbplay, k, p._stats[k])
+        # Note that `Play` objects also normally contain aggregated
+        # statistics, but we forgo that here because this constructor
+        # is only used to load plays into the database.
+
+        dbplay._drive = d
+        dbplay._play_players = []
         for pp in p.players:
-            play._play_players.append(PlayPlayer._from_nflgame(db, play, pp))
-        return play
-
-    @classmethod
-    def _from_tuple(cls, db, t):
-        """
-        Introduces a new `nfldb.Play` object from a tuple SQL
-        result. This constructor exists for performance reasons and
-        is only used inside the `nfldb.Query` class. In particular,
-        the order of the fields in the originating SELECT query is
-        significant.
-        """
-        cols = cls._sql_fields()
-        stats = {}
-        for i, v in enumerate(t[12:], 12):
-            if v != 0:
-                stats[cols[i]] = v
-        return Play(db, t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8],
-                    t[9], t[10], t[11], stats)
-
-    @staticmethod
-    def from_row(db, row):
-        """
-        Introduces a new `nfldb.Play` object from a full SQL row result
-        from the `play` table. (i.e., `row` is a dictionary mapping
-        column to value.)
-        """
-        stats = {}
-        get = row.get
-        for cat in _play_categories:
-            if get(cat, 0) != 0:
-                stats[cat] = row[cat]
-        for cat in _player_categories:
-            if get(cat, 0) != 0:
-                stats[cat] = row[cat]
-        return Play(db, row['gsis_id'], row['drive_id'], row['play_id'],
-                    row['time'], row['pos_team'], row['yardline'],
-                    row['down'], row['yards_to_go'], row['description'],
-                    row['note'], row['time_inserted'], row['time_updated'],
-                    stats)
+            dbpp = PlayPlayer._from_nflgame(db, dbplay, pp)
+            dbplay._play_players.append(dbpp)
+        return dbplay
 
     @staticmethod
     def from_id(db, gsis_id, drive_id, play_id):
@@ -1595,79 +1558,84 @@ class Play (SQLPlay):
             return None
         return plays[0]
 
-    def __init__(self, db, gsis_id, drive_id, play_id, time, pos_team,
-                 yardline, down, yards_to_go, description, note,
-                 time_inserted, time_updated, stats):
+    @staticmethod
+    def fill_drives(db, plays):
         """
-        Introduces a new `nfldb.Play` object with the given
-        attributes.
-
-        `stats` should be a dictionary of statistical play categories
-        from `nfldb.stat_categories`.
-
-        This constructor should probably not be used. Instead, use
-        `nfldb.Play.from_row` or `nfldb.Play.from_id`. Alternatively,
-        the `nfldb.Game`.`nfldb.Game.plays` and
-        `nfldb.Drive`.`nfldb.Drive.plays` attributes can be used to get
-        plays in a game or a drive, respectively.
+        Given a list of `plays`, fill all of their `drive` attributes
+        using as few queries as possible. This will also fill the
+        drives with game data.
         """
+        _fill(db, Drive, plays, '_drive')
+        Drive.fill_games(db, [p._drive for p in plays])
+
+    def __init__(self, db):
+        """
+        Creates a new and empty `nfldb.Play` object with the given
+        database connection.
+
+        This constructor should not be used by clients. Instead, you
+        should get `nfldb.Play` objects from `nfldb.Query` or from one
+        of the other constructors, like `nfldb.Play.from_id` or
+        `nfldb.Play.from_row_dict`. (The latter is useful only if you're
+        writing your own SQL queries.)
+        """
+        self._db = db
         self._drive = None
         self._play_players = None
-        self._db = db
 
-        self.gsis_id = gsis_id
+        self.gsis_id = None
         """
         The GSIS identifier for the game that this play belongs to.
         """
-        self.drive_id = drive_id
+        self.drive_id = None
         """
         The numeric drive identifier for this play. It may be
         interpreted as a sequence number.
         """
-        self.play_id = play_id
+        self.play_id = None
         """
         The numeric play identifier for this play. It can typically
         be interpreted as a sequence number scoped to the week that
         this game was played, but it's unfortunately not completely
         consistent.
         """
-        self.time = time
+        self.time = None
         """
         The time on the clock when the play started, represented with
         a `nfldb.Clock` object.
         """
-        self.pos_team = pos_team
+        self.pos_team = None
         """
         The team in possession during this play, represented as
         a team abbreviation string. Use the `nfldb.Team` constructor
         to get more information on a team.
         """
-        self.yardline = yardline
+        self.yardline = None
         """
         The starting field position of this play represented with
         `nfldb.FieldPosition`.
         """
-        self.down = down
+        self.down = None
         """
         The down on which this play begin. This may be `0` for
         "special" plays like timeouts or 2 point conversions.
         """
-        self.yards_to_go = yards_to_go
+        self.yards_to_go = None
         """
         The number of yards to go to get a first down or score a
         touchdown at the start of the play.
         """
-        self.description = description
+        self.description = None
         """
         A (basically) free-form text description of the play. This is
         typically what you see on NFL GameCenter web pages.
         """
-        self.note = note
+        self.note = None
         """
         A miscellaneous note field (as a string). Not sure what it's
         used for.
         """
-        self.time_inserted = time_inserted
+        self.time_inserted = None
         """
         The date and time that this play was added to the
         database. This can be very useful when sorting plays by the
@@ -1675,12 +1643,8 @@ class Play (SQLPlay):
         a sort requires that play data is updated relatively close to
         when it actually occurred.
         """
-        self.time_updated = time_updated
+        self.time_updated = None
         """The date and time that this play was last updated."""
-
-        seta = setattr
-        for cat in stats:
-            seta(self, cat, stats[cat])
 
     @property
     def drive(self):
@@ -1815,7 +1779,7 @@ class Drive (SQLDrive):
     corresponds to at least one play, but if the game is active, there
     exist valid ephemeral states where a drive has no plays.
     """
-    __slots__ = SQLDrive._sql_fields() + ['_db', '_game', '_plays']
+    __slots__ = SQLDrive.sql_fields() + ['_db', '_game', '_plays']
 
     @staticmethod
     def _from_nflgame(db, g, d):
@@ -1827,44 +1791,36 @@ class Drive (SQLDrive):
         Generally, this function should not be used. It is called
         automatically by `nfldb.Game._from_nflgame`.
         """
-        start_time = _nflgame_clock(d.time_start)
-        start_field = FieldPosition(getattr(d.field_start, 'offset', None))
-        end_field = FieldPosition(d.field_end.offset)
-        end_time = _nflgame_clock(d.time_end)
-        team = nfldb.team.standard_team(d.team)
-        drive = Drive(db, g.gsis_id, d.drive_num, start_field, start_time,
-                      end_field, end_time, team,
-                      PossessionTime(d.pos_time.total_seconds()),
-                      d.first_downs, d.result, d.penalty_yds,
-                      d.total_yds, d.play_cnt, None, None)
+        dbd = Drive(db)
+        dbd.gsis_id = g.gsis_id
+        dbd.drive_id = d.drive_num
+        dbd.start_time = _nflgame_clock(d.time_start)
+        dbd.start_field = FieldPosition(getattr(d.field_start, 'offset', None))
+        dbd.end_field = FieldPosition(d.field_end.offset)
+        dbd.end_time = _nflgame_clock(d.time_end)
+        dbd.pos_team = nfldb.team.standard_team(d.team)
+        dbd.pos_time = PossessionTime(d.pos_time.total_seconds())
+        dbd.first_downs = d.first_downs
+        dbd.result = d.result
+        dbd.penalty_yards = d.penalty_yds
+        dbd.yards_gained = d.total_yds
+        dbd.play_count = d.play_cnt
 
-        drive._game = g
+        dbd._game = g
         candidates = []
         for play in d.plays:
-            candidates.append(Play._from_nflgame(db, drive, play))
+            candidates.append(Play._from_nflgame(db, dbd, play))
 
         # At this point, some plays don't have valid game times. Fix it!
         # If we absolutely cannot fix it, drop the play. Maintain integrity!
-        drive._plays = []
+        dbd._plays = []
         for play in candidates:
             if play.time is None:
                 next = _next_play_with(candidates, play, lambda p: p.time)
-                play.time = _play_time(drive, play, next)
+                play.time = _play_time(dbd, play, next)
             if play.time is not None:
-                drive._plays.append(play)
-        return drive
-
-    @staticmethod
-    def from_row(db, r):
-        """
-        Introduces a new `nfldb.Drive` object from a full SQL row
-        result from the `drive` table.
-        """
-        return Drive(db, r['gsis_id'], r['drive_id'], r['start_field'],
-                     r['start_time'], r['end_field'], r['end_time'],
-                     r['pos_team'], r['pos_time'], r['first_downs'],
-                     r['result'], r['penalty_yards'], r['yards_gained'],
-                     r['play_count'], r['time_inserted'], r['time_updated'])
+                dbd._plays.append(play)
+        return dbd
 
     @staticmethod
     def from_id(db, gsis_id, drive_id):
@@ -1883,88 +1839,95 @@ class Drive (SQLDrive):
             return None
         return drives[0]
 
-    def __init__(self, db, gsis_id, drive_id, start_field, start_time,
-                 end_field, end_time, pos_team, pos_time,
-                 first_downs, result, penalty_yards, yards_gained, play_count,
-                 time_inserted, time_updated):
+    @staticmethod
+    def fill_games(db, drives):
         """
-        Introduces a new `nfldb.Drive` object with the given attributes.
+        Given a list of `drives`, fill all of their `game` attributes
+        using as few queries as possible.
+        """
+        _fill(db, Game, drives, '_game')
 
-        This constructor should probably not be used. Instead, use
-        `nfldb.Drive.from_row` or `nfldb.Drive.from_id`. Alternatively,
-        the `nfldb.Game`.`nfldb.Game.drives` attribute contains all
-        drives in the corresponding game.
+    def __init__(self, db):
         """
+        Creates a new and empty `nfldb.Drive` object with the given
+        database connection.
+
+        This constructor should not be used by clients. Instead, you
+        should get `nfldb.Drive` objects from `nfldb.Query` or from one
+        of the other constructors, like `nfldb.Drive.from_id` or
+        `nfldb.Drive.from_row_dict`. (The latter is useful only if you're
+        writing your own SQL queries.)
+        """
+        self._db = db
         self._game = None
         self._plays = None
-        self._db = db
 
-        self.gsis_id = gsis_id
+        self.gsis_id = None
         """
         The GSIS identifier for the game that this drive belongs to.
         """
-        self.drive_id = drive_id
+        self.drive_id = None
         """
         The numeric drive identifier for this drive. It may be
         interpreted as a sequence number.
         """
-        self.start_field = start_field
+        self.start_field = None
         """
         The starting field position of this drive represented
         with `nfldb.FieldPosition`.
         """
-        self.start_time = start_time
+        self.start_time = None
         """
         The starting clock time of this drive, represented with
         `nfldb.Clock`.
         """
-        self.end_field = end_field
+        self.end_field = None
         """
         The ending field position of this drive represented with
         `nfldb.FieldPosition`.
         """
-        self.end_time = end_time
+        self.end_time = None
         """
         The ending clock time of this drive, represented with
         `nfldb.Clock`.
         """
-        self.pos_team = pos_team
+        self.pos_team = None
         """
         The team in possession during this drive, represented as
         a team abbreviation string. Use the `nfldb.Team` constructor
         to get more information on a team.
         """
-        self.pos_time = pos_time
+        self.pos_time = None
         """
         The possession time of this drive, represented with
         `nfldb.PossessionTime`.
         """
-        self.first_downs = first_downs
+        self.first_downs = None
         """
         The number of first downs that occurred in this drive.
         """
-        self.result = result
+        self.result = None
         """
         A freeform text field straight from NFL's GameCenter data that
         sometimes contains the result of a drive (e.g., `Touchdown`).
         """
-        self.penalty_yards = penalty_yards
+        self.penalty_yards = None
         """
         The number of yards lost or gained from penalties in this
         drive.
         """
-        self.yards_gained = yards_gained
+        self.yards_gained = None
         """
         The total number of yards gained or lost in this drive.
         """
-        self.play_count = play_count
+        self.play_count = None
         """
         The total number of plays executed by the offense in this
         drive.
         """
-        self.time_inserted = time_inserted
+        self.time_inserted = None
         """The date and time that this drive was added."""
-        self.time_updated = time_updated
+        self.time_updated = None
         """The date and time that this drive was last updated."""
 
     @property
@@ -2091,7 +2054,7 @@ class Game (SQLGame):
     corresponds to at least one drive, but if the game is active, there
     exist valid ephemeral states where a game has no drives.
     """
-    __slots__ = SQLGame._sql_fields() + ['_db', '_drives', '_plays']
+    __slots__ = SQLGame.sql_fields() + ['_db', '_drives', '_plays']
 
     # Document instance variables for derived SQL fields.
     __pdoc__['Game.winner'] = '''The winner of this game.'''
@@ -2106,33 +2069,40 @@ class Game (SQLGame):
         `db` should be a psycopg2 connection returned by
         `nfldb.connect`.
         """
-        home_team = nfldb.team.standard_team(g.home)
-        away_team = nfldb.team.standard_team(g.away)
-        season_type = Enums._nflgame_season_phase[g.schedule['season_type']]
-        day_of_week = Enums._nflgame_game_day[g.schedule['wday']]
-        start_time = _nflgame_start_time(g.schedule)
-        finished = g.game_over()
+        dbg = Game(db)
+        dbg.gsis_id = g.eid
+        dbg.gamekey = g.gamekey
+        dbg.start_time = _nflgame_start_time(g.schedule)
+        dbg.week = g.schedule['week']
+        dbg.day_of_week = Enums._nflgame_game_day[g.schedule['wday']]
+        dbg.season_year = g.schedule['year']
+        dbg.season_type = Enums._nflgame_season_phase[g.schedule['season_type']]
+        dbg.finished = g.game_over()
+        dbg.home_team = nfldb.team.standard_team(g.home)
+        dbg.home_score_q1 = g.score_home_q1
+        dbg.home_score_q2 = g.score_home_q2
+        dbg.home_score_q3 = g.score_home_q3
+        dbg.home_score_q4 = g.score_home_q4
+        dbg.home_score_q5 = g.score_home_q5
+        dbg.home_turnovers = int(g.data['home']['to'])
+        dbg.away_team = nfldb.team.standard_team(g.away)
+        dbg.away_score_q1 = g.score_away_q1
+        dbg.away_score_q2 = g.score_away_q2
+        dbg.away_score_q3 = g.score_away_q3
+        dbg.away_score_q4 = g.score_away_q4
+        dbg.away_score_q5 = g.score_away_q5
+        dbg.away_turnovers = int(g.data['away']['to'])
 
         # If it's been 8 hours since game start, we always conclude finished!
-        if (now() - start_time).total_seconds() >= (60 * 60 * 8):
-            finished = True
+        if (now() - dbg.start_time).total_seconds() >= (60 * 60 * 8):
+            dbg.finished = True
 
-        game = Game(db, g.eid, g.gamekey, start_time, g.schedule['week'],
-                    day_of_week, g.schedule['year'], season_type, finished,
-                    home_team, g.score_home, g.score_home_q1,
-                    g.score_home_q2, g.score_home_q3, g.score_home_q4,
-                    g.score_home_q5, int(g.data['home']['to']),
-                    away_team, g.score_away, g.score_away_q1,
-                    g.score_away_q2, g.score_away_q3, g.score_away_q4,
-                    g.score_away_q5, int(g.data['away']['to']),
-                    None, None)
-
-        game._drives = []
+        dbg._drives = []
         for drive in g.drives:
             if not hasattr(drive, 'game'):
                 continue
-            game._drives.append(Drive._from_nflgame(db, game, drive))
-        return game
+            dbg._drives.append(Drive._from_nflgame(db, dbg, drive))
+        return dbg
 
     @staticmethod
     def _from_schedule(db, s):
@@ -2158,14 +2128,6 @@ class Game (SQLGame):
         return Game._from_nflgame(db, _Game())
 
     @staticmethod
-    def from_row(db, row):
-        """
-        Introduces a new `nfldb.Game` object from a full SQL row
-        result from the `game` table.
-        """
-        return Game(db, **row)
-
-    @staticmethod
     def from_id(db, gsis_id):
         """
         Given a GSIS identifier (e.g., `2012090500`) as a string,
@@ -2180,118 +2142,118 @@ class Game (SQLGame):
             return None
         return games[0]
 
-    def __init__(self, db, gsis_id, gamekey, start_time, week, day_of_week,
-                 season_year, season_type, finished,
-                 home_team, home_score, home_score_q1, home_score_q2,
-                 home_score_q3, home_score_q4, home_score_q5, home_turnovers,
-                 away_team, away_score, away_score_q1, away_score_q2,
-                 away_score_q3, away_score_q4, away_score_q5, away_turnovers,
-                 time_inserted, time_updated, loser=None, winner=None):
+    def __init__(self, db):
         """
-        Introduces a new `nfldb.Drive` object with the given attributes.
+        Creates a new and empty `nfldb.Game` object with the given
+        database connection.
 
-        This constructor should probably not be used. Instead, use
-        `nfldb.Game.from_row` or `nfldb.Game.from_id`.
+        This constructor should not be used by clients. Instead, you
+        should get `nfldb.Game` objects from `nfldb.Query` or from one
+        of the other constructors, like `nfldb.Game.from_id` or
+        `nfldb.Game.from_row_dict`. (The latter is useful only if you're
+        writing your own SQL queries.)
         """
-        self._drives = None
-        self._plays = None
-
         self._db = db
         """
         The psycopg2 database connection.
         """
-        self.gsis_id = gsis_id
+        self._drives = None
+        self._plays = None
+
+        self.gsis_id = None
         """
         The NFL GameCenter id of the game. It is a string
         with 10 characters. The first 8 correspond to the date of the
         game, while the last 2 correspond to an id unique to the week that
         the game was played.
         """
-        self.gamekey = gamekey
+        self.gamekey = None
         """
         Another unique identifier for a game used by the
         NFL. It is a sequence number represented as a 5 character string.
         The gamekey is specifically used to tie games to other resources,
         like the NFL's content delivery network.
         """
-        self.start_time = start_time
+        self.start_time = None
         """
         A Python datetime object corresponding to the start time of
         the game. The timezone of this value will be equivalent to the
         timezone specified by `nfldb.set_timezone` (which is by default
         set to the value specified in the configuration file).
         """
-        self.week = week
+        self.week = None
         """
         The week number of this game. It is always relative
         to the phase of the season. Namely, the first week of preseason
         is 1 and so is the first week of the regular season.
         """
-        self.day_of_week = day_of_week
+        self.day_of_week = None
         """
         The day of the week this game was played on.
         Possible values correspond to the `nfldb.Enums.game_day` enum.
         """
-        self.season_year = season_year
+        self.season_year = None
         """
         The year of the season of this game. This
         does not necessarily match the year that the game was played. For
         example, games played in January 2013 are in season 2012.
         """
-        self.season_type = season_type
+        self.season_type = None
         """
         The phase of the season. e.g., `Preseason`,
         `Regular season` or `Postseason`. All valid values correspond
         to the `nfldb.Enums.season_phase`.
         """
-        self.finished = finished
+        self.finished = None
         """
         A boolean that is `True` if and only if the game has finished.
         """
-        self.home_team = home_team
+        self.home_team = None
         """
         The team abbreviation for the home team. Use the `nfldb.Team`
         constructor to get more information on a team.
         """
-        self.home_score = home_score
+        self.home_score = None
         """The current total score for the home team."""
-        self.home_score_q1 = home_score_q1
+        self.home_score_q1 = None
         """The 1st quarter score for the home team."""
-        self.home_score_q2 = home_score_q2
+        self.home_score_q2 = None
         """The 2nd quarter score for the home team."""
-        self.home_score_q3 = home_score_q3
+        self.home_score_q3 = None
         """The 3rd quarter score for the home team."""
-        self.home_score_q4 = home_score_q4
+        self.home_score_q4 = None
         """The 4th quarter score for the home team."""
-        self.home_score_q5 = home_score_q5
+        self.home_score_q5 = None
         """The OT quarter score for the home team."""
-        self.home_turnovers = home_turnovers
+        self.home_turnovers = None
         """Total turnovers for the home team."""
-        self.away_team = away_team
+        self.away_team = None
         """
         The team abbreviation for the away team. Use the `nfldb.Team`
         constructor to get more information on a team.
         """
-        self.away_score = away_score
+        self.away_score = None
         """The current total score for the away team."""
-        self.away_score_q1 = away_score_q1
+        self.away_score_q1 = None
         """The 1st quarter score for the away team."""
-        self.away_score_q2 = away_score_q2
+        self.away_score_q2 = None
         """The 2nd quarter score for the away team."""
-        self.away_score_q3 = away_score_q3
+        self.away_score_q3 = None
         """The 3rd quarter score for the away team."""
-        self.away_score_q4 = away_score_q4
+        self.away_score_q4 = None
         """The 4th quarter score for the away team."""
-        self.away_score_q5 = away_score_q5
+        self.away_score_q5 = None
         """The OT quarter score for the away team."""
-        self.away_turnovers = away_turnovers
+        self.away_turnovers = None
         """Total turnovers for the away team."""
-        self.time_inserted = time_inserted
+        self.time_inserted = None
         """The date and time that this game was added."""
-        self.time_updated = time_updated
+        self.time_updated = None
         """The date and time that this game was last updated."""
-
-        self.winner, self.loser = winner, loser
+        self.winner = None
+        """The team abbreviation for the winner of this game."""
+        self.loser = None
+        """The team abbreviation for the loser of this game."""
 
     @property
     def is_playing(self):

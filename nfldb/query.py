@@ -14,21 +14,20 @@ import nfldb.types as types
 
 try:
     strtype = basestring
-except NameError:  # I have lofty hopes for Python 3.
+except NameError:
     strtype = str
 
 
 __pdoc__ = {}
 
 
-_PRIMARY_KEYS = {
-    'game': ['gsis_id'],
-    'drive': ['gsis_id', 'drive_id'],
-    'play': ['gsis_id', 'drive_id', 'play_id'],
-    'play_player': ['gsis_id', 'drive_id', 'play_id', 'player_id'],
-    'player': ['player_id'],
+_ENTITIES = {
+    'game': types.Game,
+    'drive': types.Drive,
+    'play': types.Play,
+    'play_player': types.PlayPlayer,
+    'player': types.Player,
 }
-"""The primary keys for each table."""
 
 
 def aggregate(objs):
@@ -78,6 +77,31 @@ def current(db):
         cursor.execute('SELECT season_type, season_year, week FROM meta')
         return cursor.fetchone()
     return tuple([None] * 3)
+
+
+def _entities_by_ids(db, entity, *ids):
+    """
+    Given an `nfldb` `entity` like `nfldb.Play` and a list of tuples
+    `ids` where each tuple is the primary key (or a subset of the
+    primary key) for `entity`, return a list of instances of `entity`
+    corresponding to the `ids` given.
+
+    The order of the returned entities is undefined.
+    """
+    funs = {
+        types.Game: {'query': Query.game, 'results': Query.as_games},
+        types.Drive: {'query': Query.drive, 'results': Query.as_drives},
+        types.Play: {'query': Query.play, 'results': Query.as_plays},
+        types.PlayPlayer: {'query': Query.play_player,
+                           'results': Query.as_play_players},
+        types.Player: {'query': Query.player, 'results': Query.as_players},
+    }[entity]
+    q = Query(db)
+    entq = funs['query']
+    for pkey in ids:
+        named = dict(zip(entity._sql_tables['primary'], pkey))
+        q.orelse(entq(Query(db), **named))
+    return funs['results'](q)
 
 
 def player_search(db, full_name, team=None, position=None,
@@ -150,7 +174,7 @@ def player_search(db, full_name, team=None, position=None,
             qposition = cursor.mogrify('position = %s', (position,))
 
         fuzzy_filled = cursor.mogrify(fuzzy, (full_name,))
-        columns = types.Player._sql_select_fields(types.Player._sql_fields())
+        columns = types.Player._sql_select_fields(types.Player.sql_fields())
         columns.append('%s AS distance' % fuzzy_filled)
         q = q.format(
             columns=', '.join(columns),
@@ -159,7 +183,8 @@ def player_search(db, full_name, team=None, position=None,
         cursor.execute(q, (full_name,))
 
         for row in cursor.fetchall():
-            results.append((types.Player.from_row(db, row), row['distance']))
+            r = (types.Player.from_row_dict(db, row), row['distance'])
+            results.append(r)
     if limit == 1:
         if len(results) == 0:
             return (None, None)
@@ -194,7 +219,7 @@ def _append_conds(conds, entity, kwargs):
     for the `entity` type given. Only the values in `kwargs` that
     correspond to fields in `entity` are used.
     """
-    allowed = set(entity._sql_fields())
+    allowed = set(entity.sql_fields())
     for k, v in kwargs.items():
         kbare = _no_comp_suffix(k)
         assert kbare in allowed, \
@@ -541,9 +566,8 @@ class Query (Condition):
         self._limit = count
         return self
 
-    @property
-    def _sorter(self):
-        return Sorter(self._sort_exprs, self._limit)
+    def _sorter(self, default_entity):
+        return Sorter(default_entity, self._sort_exprs, self._limit)
 
     def _assert_no_aggregate(self):
         assert len(self._agg_andalso) == 0 and len(self._agg_orelse) == 0, \
@@ -699,8 +723,15 @@ class Query (Condition):
         _append_conds(self._agg_default_cond, types.PlayPlayer, kw)
         return self
 
-    def _make_join_query(self, cursor, entity, only_prim=False, sorter=None):
+    def _make_join_query(self, cursor, entity, only_prim=False, sorter=None,
+                         ent_fillers=None):
+        if sorter is None:
+            sorter = self._sorter(entity)
+
         entities = self._entities()
+        entities.update(sorter.entities)
+        for ent in ent_fillers or []:
+            entities.add(ent)
         entities.discard(entity)
 
         # If we're joining the `player` table with any other table except
@@ -713,17 +744,21 @@ class Query (Condition):
                 or (entity is types.Player and len(entities) > 0):
             entities.add(types.PlayPlayer)
 
-        fields = None
         if only_prim:
-            fields = entity._sql_tables['primary']
-        if sorter is None:
-            sorter = self._sorter
+            columns = entity._sql_tables['primary']
+            fields = entity._sql_select_fields(fields=columns)
+        else:
+            fields = []
+            for ent in ent_fillers or []:
+                fields += ent._sql_select_fields(fields=ent.sql_fields())
+            fields += entity._sql_select_fields(fields=entity.sql_fields())
         args = {
-            'select_from': entity._sql_select_from(fields=fields),
+            'columns': ', '.join(fields),
+            'from': entity._sql_from(),
             'joins': entity._sql_join_all(entities),
             'where': sql.ands(self._sql_where(cursor)),
             'groupby': '',
-            'sortby': sorter.sql(entity),
+            'sortby': sorter.sql(),
         }
 
         # We need a GROUP BY if we're joining with a table that has more
@@ -736,8 +771,7 @@ class Query (Condition):
             args['groupby'] = 'GROUP BY ' + ', '.join(fields)
 
         q = '''
-            {select_from}
-            {joins}
+            SELECT {columns} {from} {joins}
             WHERE {where}
             {groupby}
             {sortby}
@@ -752,11 +786,11 @@ class Query (Condition):
         self._assert_no_aggregate()
 
         results = []
-        with Tx(self._db) as cursor:
+        with Tx(self._db, factory=tuple_cursor) as cursor:
             q = self._make_join_query(cursor, types.Game)
             cursor.execute(q)
             for row in cursor.fetchall():
-                results.append(types.Game.from_row(self._db, row))
+                results.append(types.Game.from_row_tuple(self._db, row))
         return results
 
     def as_drives(self):
@@ -767,11 +801,11 @@ class Query (Condition):
         self._assert_no_aggregate()
 
         results = []
-        with Tx(self._db) as cursor:
+        with Tx(self._db, factory=tuple_cursor) as cursor:
             q = self._make_join_query(cursor, types.Drive)
             cursor.execute(q)
             for row in cursor.fetchall():
-                results.append(types.Drive.from_row(self._db, row))
+                results.append(types.Drive.from_row_tuple(self._db, row))
         return results
 
     def as_plays(self, fill=True):
@@ -799,15 +833,18 @@ class Query (Condition):
         # the existing sort criteria, which guarantees that the sort will
         # always be the same.
         # (We are careful not to override the user specified
-        # `self._sort_exprs`.
+        # `self._sort_exprs`.)
+        #
+        # That was a lie. We override the user settings if the user asks
+        # to sort by `gsis_id`, `drive_id` or `play_id`.
         consistent = [(c, 'asc') for c in ['gsis_id', 'drive_id', 'play_id']]
-        sorter = Sorter(self._sort_exprs, self._limit)
-        sorter.exprs += consistent
+        sorter = Sorter(types.Play, self._sort_exprs, self._limit)
+        sorter.add_exprs(*consistent)
 
         if not fill:
             results = []
             with Tx(self._db, factory=tuple_cursor) as cursor:
-                init = types.Play._from_tuple
+                init = types.Play.from_row_tuple
                 q = self._make_join_query(cursor, types.Play, sorter=sorter)
                 cursor.execute(q)
                 for row in cursor.fetchall():
@@ -816,7 +853,7 @@ class Query (Condition):
         else:
             plays = OrderedDict()
             with Tx(self._db, factory=tuple_cursor) as cursor:
-                init_play = types.Play._from_tuple
+                init_play = types.Play.from_row_tuple
                 q = self._make_join_query(cursor, types.Play, sorter=sorter)
                 cursor.execute(q)
                 for row in cursor.fetchall():
@@ -827,16 +864,19 @@ class Query (Condition):
                 # Run the above query *again* as a subquery.
                 # This time, only fetch the primary key, and use that to
                 # fetch all the `play_player` records in one swoop.
+                aliases = {'play_player': 'pp'}
                 ids = self._make_join_query(cursor, types.Play,
                                             only_prim=True, sorter=sorter)
-                select_from = types.PlayPlayer._sql_select_from(
-                    aliases={'play_player': 'pp'})
+                from_tables = types.PlayPlayer._sql_from(aliases=aliases)
+                columns = types.PlayPlayer._sql_select_fields(
+                    fields=types.PlayPlayer.sql_fields(), aliases=aliases)
                 q = '''
-                    {select_from}
+                    SELECT {columns} {from_tables}
                     WHERE (pp.gsis_id, pp.drive_id, pp.play_id) IN ({ids})
-                '''.format(select_from=select_from, ids=ids)
+                '''.format(columns=', '.join(columns),
+                           from_tables=from_tables, ids=ids)
 
-                init_pp = types.PlayPlayer._from_tuple
+                init_pp = types.PlayPlayer.from_row_tuple
                 cursor.execute(q)
                 for row in cursor.fetchall():
                     pp = init_pp(self._db, row)
@@ -859,7 +899,7 @@ class Query (Condition):
 
         results = []
         with Tx(self._db, factory=tuple_cursor) as cursor:
-            init = types.PlayPlayer._from_tuple
+            init = types.PlayPlayer.from_row_tuple
             q = self._make_join_query(cursor, types.PlayPlayer)
             cursor.execute(q)
             for row in cursor.fetchall():
@@ -879,7 +919,7 @@ class Query (Condition):
             cursor.execute(q)
 
             for row in cursor.fetchall():
-                results.append(types.Player.from_row(self._db, row))
+                results.append(types.Player.from_row_dict(self._db, row))
         return results
 
     def as_aggregate(self):
@@ -894,9 +934,24 @@ class Query (Condition):
         If any sorting criteria is specified, it is applied to the
         aggregate *player* values only.
         """
+        class AggPP (types.PlayPlayer):
+            @classmethod
+            def _sql_field(cls, name, aliases=None):
+
+                if name in cls._derived_combined:
+                    fields = cls._derived_combined[name]
+                    fields = [cls._sql_field(f, aliases=aliases) for f in fields]
+                    return ' + '.join(fields)
+                elif name == 'points':
+                    fields = ['(%s * %d)' % (cls._sql_field(f, aliases=aliases), pval)
+                              for f, pval in cls._point_values]
+                    return ' + '.join(fields)
+                else:
+                    sql = super(AggPP, cls)._sql_field(name, aliases=aliases)
+                    return 'SUM(%s)' % sql
+
         joins = ''
         results = []
-
         with Tx(self._db) as cur:
             for ent in self._entities():
                 if ent is types.PlayPlayer:
@@ -904,13 +959,13 @@ class Query (Condition):
                 joins += types.PlayPlayer._sql_join_to_all(ent)
 
             sum_fields = types._player_categories.keys() \
-                + types.PlayPlayer._sql_tables['derived']
-            select_sum_fields = types.PlayPlayer._sql_select_fields(
-                sum_fields, wrap=lambda f: 'SUM(%s)' % f)
+                + AggPP._sql_tables['derived']
+            select_sum_fields = AggPP._sql_select_fields(sum_fields)
             where = self._sql_where(cur)
             having = self._sql_where(cur, aggregate=True)
             q = '''
-                SELECT play_player.player_id, {sum_fields}
+                SELECT
+                    play_player.player_id AS play_player_player_id, {sum_fields}
                 FROM play_player
                 {joins}
                 WHERE {where}
@@ -922,20 +977,13 @@ class Query (Condition):
                 joins=joins,
                 where=sql.ands(where),
                 having=sql.ands(having),
-                order=self._sorter.sql(types.PlayPlayer,
-                                       aliases={'play_player': ''}),
+                order=self._sorter(AggPP).sql(),
             )
-            cur.execute(q)
 
+            init = AggPP.from_row_dict
+            cur.execute(q)
             for row in cur.fetchall():
-                stats = {}
-                for f in sum_fields:
-                    v = row[f]
-                    if v != 0:
-                        stats[f] = v
-                pp = types.PlayPlayer(self._db, None, None, None,
-                                      row['player_id'], None, stats)
-                results.append(pp)
+                results.append(init(self._db, row))
         return results
 
     def _entities(self):
@@ -991,27 +1039,39 @@ class Sorter (object):
         assert order in ('ASC', 'DESC'), 'order must be "asc" or "desc"'
         return order
 
-    def __init__(self, exprs=None, limit=None):
-        def normal_expr(e):
-            if isinstance(e, strtype):
-                return (e, 'DESC')
-            elif isinstance(e, tuple):
-                return (e[0], Sorter._normalize_order(e[1]))
-            else:
-                raise ValueError(
-                    "Sortby expressions must be strings "
-                    "or two-element tuples like (column, order). "
-                    "Got value '%s' with type '%s'." % (e, type(e)))
-
+    def __init__(self, default_entity, exprs=None, limit=None):
+        self.default_entity = default_entity
+        self.entities = set([default_entity])
         self.limit = int(limit or 0)
         self.exprs = []
-        if exprs is not None:
-            if isinstance(exprs, strtype) or isinstance(exprs, tuple):
-                self.exprs = [normal_expr(exprs)]
-            else:
-                self.exprs = map(normal_expr, exprs)
+        if isinstance(exprs, strtype) or isinstance(exprs, tuple):
+            self.add_exprs(exprs)
+        else:
+            self.add_exprs(*(exprs or []))
 
-    def sql(self, entity, aliases=None):
+    def add_exprs(self, *exprs):
+        for e in exprs:
+            e = self.normal_expr(e)
+            self.entities.add(e[0])
+            self.exprs.append(e)
+
+    def normal_expr(self, e):
+        if isinstance(e, strtype):
+            return (self.default_entity, e, 'DESC')
+        elif isinstance(e, tuple):
+            assert len(e) == 2, 'invalid sort expression'
+            return (self.default_entity, e[0], self._normalize_order(e[1]))
+            # elif len(e) == 3: 
+                # assert e[0] in _ENTITIES, 'invalid entity: %s' % e[0] 
+                # self.entities.add(_ENTITIES[e[0]]) 
+                # return (_ENTITIES[e[0]], e[1], self._normalize_order(e[2])) 
+        else:
+            raise ValueError(
+                "Sortby expressions must be strings "
+                "or two-element tuples like (column, order). "
+                "Got value '%s' with type '%s'." % (e, type(e)))
+
+    def sql(self, aliases=None):
         """
         Return a SQL `ORDER BY ... LIMIT` expression corresponding to
         the criteria in `self`. If there are no ordering expressions
@@ -1019,22 +1079,16 @@ class Sorter (object):
         regardless of any limit criteria. (That is, specifying a limit
         requires at least one order expression.)
 
-        If `fields` is specified, then only SQL columns in the sequence
-        are used in the ORDER BY expression.
-
         The value of `prefix` is passed to the `tabtype._as_sql`
         function.
         """
-        fields = entity._sql_fields()
-        exprs = [(f, o) for f, o in self.exprs if f in fields]
-        if len(exprs) == 0:
-            if self.limit > 0:
-                return ' LIMIT %d' % self.limit
-            return ''
-
-        as_sql = lambda f: entity._sql_field(f, aliases=aliases)
-        s = ' ORDER BY '
-        s += ', '.join('%s %s' % (as_sql(f), o) for f, o in exprs)
+        s = ''
+        if len(self.exprs) > 0:
+            sort_fields = []
+            for ent, field, order in self.exprs:
+                field = ent._sql_field(field, aliases=aliases)
+                sort_fields.append('%s %s' % (field, order))
+            s += 'ORDER BY %s' % ', '.join(sort_fields)
         if self.limit > 0:
             s += ' LIMIT %d' % self.limit
-        return s
+        return ' ' + s + ' '
