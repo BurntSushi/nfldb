@@ -2079,6 +2079,7 @@ class Game (SQLGame):
         dbg.season_type = Enums._nflgame_season_phase[g.schedule['season_type']]
         dbg.finished = g.game_over()
         dbg.home_team = nfldb.team.standard_team(g.home)
+        dbg.home_score = g.score_home
         dbg.home_score_q1 = g.score_home_q1
         dbg.home_score_q2 = g.score_home_q2
         dbg.home_score_q3 = g.score_home_q3
@@ -2086,6 +2087,7 @@ class Game (SQLGame):
         dbg.home_score_q5 = g.score_home_q5
         dbg.home_turnovers = int(g.data['home']['to'])
         dbg.away_team = nfldb.team.standard_team(g.away)
+        dbg.away_score = g.score_away
         dbg.away_score_q1 = g.score_away_q1
         dbg.away_score_q2 = g.score_away_q2
         dbg.away_score_q3 = g.score_away_q3
