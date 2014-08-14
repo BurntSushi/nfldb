@@ -1744,12 +1744,6 @@ class Play (SQLPlay):
     def __getattr__(self, k):
         if k in Play.__slots__:
             return 0
-        if k in PlayPlayer.__slots__:
-            for pp in self.play_players:
-                v = getattr(pp, k)
-                if v != 0:
-                    return v
-            return 0
         raise AttributeError(k)
 
 
