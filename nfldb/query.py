@@ -1086,7 +1086,12 @@ class Sorter (object):
         if len(self.exprs) > 0:
             sort_fields = []
             for ent, field, order in self.exprs:
-                field = ent._sql_field(field, aliases=aliases)
+                try:
+                    field = ent._sql_field(field, aliases=aliases)
+                except KeyError as e:
+                    raise ValueError(
+                        '%s is not a valid sort field for %s'
+                        % (field, ent.__name__))
                 sort_fields.append('%s %s' % (field, order))
             s += 'ORDER BY %s' % ', '.join(sort_fields)
         if self.limit > 0:
