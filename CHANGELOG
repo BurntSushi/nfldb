@@ -1,3 +1,20 @@
+0.2.4
+=====
+Minor refactoring and performance features.
+    
+The refactoring is mostly confined to the SQL 'ORDER BY' generator. I
+had intended to make it more powerful, but that turned out to be more
+work than I expected. Instead, I'll settle for clearer code.
+
+The performance features aren't likely to be useful unless you're doing
+heavy analysis or are using nfldb to power a web site. Briefly, several
+`fill` functions have been added to nfldb's entity types that will, for
+example, fill in a list of plays with drive and game data using as few
+queries as possible. Currently, this will fall over with >5000 items
+because of PostgreSQL limits, but future work will fix this using some
+sort of batching mechanism.
+
+
 0.2.3
 =====
 - Fixes #41 (Python 2.6 compatibility).
