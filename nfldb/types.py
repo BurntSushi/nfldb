@@ -136,6 +136,8 @@ def _fill(db, fill_with, to_fill, attr):
 
     import nfldb.query
     ids = list(set(pkval(obj) for obj in to_fill))
+    if len(ids) == 0:
+        return
     objs = nfldb.query._entities_by_ids(db, fill_with, *ids)
     byid = dict([(pkval(obj), obj) for obj in objs])
     for obj in to_fill:
