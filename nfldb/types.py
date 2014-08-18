@@ -1820,6 +1820,7 @@ class Drive (SQLDrive):
                 play.time = _play_time(dbd, play, next)
             if play.time is not None:
                 dbd._plays.append(play)
+        dbd._plays.sort(key=lambda p: p.play_id)
         return dbd
 
     @staticmethod
@@ -2104,6 +2105,7 @@ class Game (SQLGame):
             if not hasattr(drive, 'game'):
                 continue
             dbg._drives.append(Drive._from_nflgame(db, dbg, drive))
+        dbg._drives.sort(key=lambda d: d.drive_id)
         return dbg
 
     @staticmethod
