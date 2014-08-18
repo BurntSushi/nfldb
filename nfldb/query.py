@@ -1088,7 +1088,7 @@ class Sorter (object):
             for ent, field, order in self.exprs:
                 try:
                     field = ent._sql_field(field, aliases=aliases)
-                except KeyError as e:
+                except KeyError:
                     raise ValueError(
                         '%s is not a valid sort field for %s'
                         % (field, ent.__name__))
