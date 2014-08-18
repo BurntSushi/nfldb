@@ -1,3 +1,17 @@
+0.2.5
+=====
+- Added a new "simulation" mode to `nfldb-update`. Try it with
+  `nfldb-update --simulate 2014081501`.
+- Added a new `game_date` field to plays that corresponds to the
+  first 8 characters of the play's game gsis_id. This ends up
+  translating to the date that the game played, which just so happens
+  to be how play identifiers are handed out on NFL.com. This makes
+  sorting plays with respect to *when* they happened simple.
+- Refactored some of nfldb-update into its own module so it can
+  be invoked easier from other programs.
+- Better error messages when sorting with invalid field.
+
+
 0.2.4
 =====
 Minor refactoring and performance features.
