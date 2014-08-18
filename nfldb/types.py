@@ -1413,7 +1413,8 @@ class SQLPlay (sql.Entity):
                       ] + _play_categories.keys()),
             ('agg_play', _player_categories.keys()),
         ],
-        'derived': ['offense_yds', 'offense_tds', 'defense_tds', 'points'],
+        'derived': ['offense_yds', 'offense_tds', 'defense_tds', 'points',
+                    'game_date'],
     }
 
     @classmethod
@@ -1426,6 +1427,9 @@ class SQLPlay (sql.Entity):
             fields = ['(%s * %d)' % (cls._sql_field(f, aliases=aliases), pval)
                       for f, pval in PlayPlayer._point_values]
             return 'GREATEST(%s)' % ', '.join(fields)
+        elif name == 'game_date':
+            gsis_id = cls._sql_field('gsis_id', aliases=aliases)
+            return 'SUBSTRING(%s from 1 for 8)' % gsis_id
         else:
             return super(SQLPlay, cls)._sql_field(name, aliases=aliases)
 
