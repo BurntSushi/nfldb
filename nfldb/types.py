@@ -1375,9 +1375,18 @@ class PlayPlayer (SQLPlayPlayer):
 
     def _copy(self):
         """Returns a copy of `self`."""
-        stats = dict([(k, getattr(self, k, 0)) for k in _player_categories])
-        pp = PlayPlayer(self._db, self.gsis_id, self.drive_id, self.play_id,
-                        self.player_id, self.team, stats)
+        pp = PlayPlayer(self._db)
+        pp.gsis_id = self.gsis_id
+        pp.drive_id = self.drive_id
+        pp.play_id = self.play_id
+        pp.player_id = self.player_id
+        pp.team = self.team
+
+        ga, sa = getattr, setattr
+        for k in _player_categories:
+            v = getattr(self, k, 0)
+            if v != 0:
+                sa(pp, k, v)
         pp._player = self._player
         pp._play = self._play
         return pp
