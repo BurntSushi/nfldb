@@ -1,3 +1,8 @@
+0.2.6
+=====
+- Fixed a bug that was preventing `nfldb.aggregate` from working.
+
+
 0.2.5
 =====
 - Added a new "simulation" mode to `nfldb-update`. Try it with
