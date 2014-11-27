@@ -47,7 +47,11 @@ def _nflgame_start_time(schedule):
     # BUG: Getting the hour here will be wrong if a game starts before Noon
     # EST. Not sure what to do about it...
     hour, minute = schedule['time'].strip().split(':')
-    hour, minute = (int(hour) + 12) % 24, int(minute)
+    minute = int(minute)
+    if hour == '12':
+        hour = 12
+    else:
+        hour = (int(hour) + 12) % 24
     d = datetime.datetime(year, month, day, hour, minute)
     return pytz.timezone('US/Eastern').localize(d).astimezone(pytz.utc)
 
