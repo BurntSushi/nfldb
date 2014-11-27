@@ -14,7 +14,7 @@ except LookupError:
         return {True: enc}.get(name == 'mbcs')
     codecs.register(wrapper)
 
-install_requires = ['nflgame>=1.2.8', 'psycopg2', 'enum34', 'pytz']
+install_requires = ['nflgame>=1.2.9', 'psycopg2', 'enum34', 'pytz']
 try:
     import argparse
 except ImportError:

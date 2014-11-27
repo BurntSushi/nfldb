@@ -1,3 +1,9 @@
+0.2.8
+=====
+- Fix time handling for games starting at 12pm/12:30pm.
+- Depend on nflgame >= 1.2.9.
+
+
 0.2.7
 =====
 - Depend on nflgame >= 1.2.8 (see nflgame#95).
@@ -25,7 +31,7 @@
 0.2.4
 =====
 Minor refactoring and performance features.
-    
+
 The refactoring is mostly confined to the SQL 'ORDER BY' generator. I
 had intended to make it more powerful, but that turned out to be more
 work than I expected. Instead, I'll settle for clearer code.
@@ -59,7 +65,7 @@ sort of batching mechanism.
 0.2.0
 =====
 Materialized view for `play`. `Query` demolition.
-    
+
 ATTN: This introduces a breaking change. The `team` field can no longer
 be used in the `play` method. Instead, you should use the new
 `play_player` method to select individual player statistics belonging to
