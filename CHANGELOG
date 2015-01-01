@@ -1,3 +1,8 @@
+0.2.9
+=====
+- Update nflgame dependency to get playoff games.
+
+
 0.2.8
 =====
 - Fix time handling for games starting at 12pm/12:30pm.
