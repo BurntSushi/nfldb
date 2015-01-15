@@ -1,3 +1,8 @@
+0.2.10
+======
+- Fix #80.
+
+
 0.2.9
 =====
 - Update nflgame dependency to get playoff games.
