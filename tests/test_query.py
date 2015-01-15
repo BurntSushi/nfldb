@@ -53,6 +53,11 @@ def test_drives_from_player(qgame):
     assert len(qgame.as_drives()) == 15
 
 
+def test_player_position_disjunction(q):
+    players = q.player(position=['QB', 'RB', 'WR']).limit(1).as_players()
+    assert len(players) == 1
+
+
 def test_longest_pass_player(q):
     q.sort('passing_yds').limit(1)
     assert q.as_play_players()[0].player.full_name == 'Brandon Weeden'

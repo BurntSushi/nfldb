@@ -347,11 +347,14 @@ class Comparison (Condition):
         field = self.entity._sql_field(self.column, aliases=aliases)
         if aggregate:
             field = 'SUM(%s)' % field
-        paramed = '%s %s %s' % (field, self.operator, '%s')
         if isinstance(self.value, tuple) or isinstance(self.value, list):
-            paramed = paramed % 'ANY (%s)'
-            self.value = list(self.value)  # Coerce tuples to pg ARRAYs...
-        return cursor.mogrify(paramed, (self.value,))
+            assert self.operator == '=', \
+                'Disjunctions must use "=" for column "%s"' % field
+            vals = [cursor.mogrify('%s', (v,)) for v in self.value]
+            return '%s IN (%s)' % (field, ', '.join(vals))
+        else:
+            paramed = '%s %s %s' % (field, self.operator, '%s')
+            return cursor.mogrify(paramed, (self.value,))
 
 
 def QueryOR(db):
