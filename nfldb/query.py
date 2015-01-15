@@ -1061,10 +1061,10 @@ class Sorter (object):
         elif isinstance(e, tuple):
             assert len(e) == 2, 'invalid sort expression'
             return (self.default_entity, e[0], self._normalize_order(e[1]))
-            # elif len(e) == 3: 
-                # assert e[0] in _ENTITIES, 'invalid entity: %s' % e[0] 
-                # self.entities.add(_ENTITIES[e[0]]) 
-                # return (_ENTITIES[e[0]], e[1], self._normalize_order(e[2])) 
+            # elif len(e) == 3:
+                # assert e[0] in _ENTITIES, 'invalid entity: %s' % e[0]
+                # self.entities.add(_ENTITIES[e[0]])
+                # return (_ENTITIES[e[0]], e[1], self._normalize_order(e[2]))
         else:
             raise ValueError(
                 "Sortby expressions must be strings "
