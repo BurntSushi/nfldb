@@ -39,6 +39,11 @@ def _nflgame_start_time(schedule):
     Given an entry in `nflgame.schedule`, return the start time of the
     game in UTC.
     """
+    # Hack to get around ambiugous times for weird London games.
+    if schedule['eid'] == '2015100400':
+        d = datetime.datetime(2015, 10, 4, 9, 30)
+        return pytz.timezone('US/Eastern').localize(d).astimezone(pytz.utc)
+
     # Year is always the season, so we bump it if the month is Jan-March.
     year, month, day = schedule['year'], schedule['month'], schedule['day']
     if 1 <= schedule['month'] <= 3:

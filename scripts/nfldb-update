@@ -37,7 +37,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     nfldb.update.run(**vars(args))
-    # nfldb.update.run(player_interval=args.player_interval, 
-                     # interval=args.interval, 
-                     # update_schedules=args.update_schedules, 
-                     # batch_size=args.batch_size) 
+    # nfldb.update.run(player_interval=args.player_interval,
+                     # interval=args.interval,
+                     # update_schedules=args.update_schedules,
+                     # batch_size=args.batch_size)
