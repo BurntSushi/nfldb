@@ -43,6 +43,9 @@ def _nflgame_start_time(schedule):
     if schedule['eid'] == '2015100400':
         d = datetime.datetime(2015, 10, 4, 9, 30)
         return pytz.timezone('US/Eastern').localize(d).astimezone(pytz.utc)
+    elif schedule['eid'] == '2015102500':
+        d = datetime.datetime(2015, 10, 25, 9, 30)
+        return pytz.timezone('US/Eastern').localize(d).astimezone(pytz.utc)
 
     # Year is always the season, so we bump it if the month is Jan-March.
     year, month, day = schedule['year'], schedule['month'], schedule['day']
