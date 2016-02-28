@@ -535,12 +535,14 @@ def _migrate_2(c):
             team_id character varying (3) NOT NULL,
             city character varying (50) NOT NULL,
             name character varying (50) NOT NULL,
+            conference character varying (3) NOT NULL,
+            division character varying (50) NOT NULL
             PRIMARY KEY (team_id)
         )
     ''')
     c.execute('''
-        INSERT INTO team (team_id, city, name) VALUES %s
-    ''' % (', '.join(_mogrify(c, team[0:3]) for team in nfldb.team.teams)))
+        INSERT INTO team (team_id, city, name, conference, division) VALUES %s
+    ''' % (', '.join(_mogrify(c, team[0:5]) for team in nfldb.team.teams)))
 
     c.execute('''
         CREATE TABLE player (
