@@ -230,7 +230,7 @@ def _append_conds(conds, entity, kwargs):
 
 def _no_comp_suffix(s):
     """Removes the comparison operator suffix from a search field."""
-    return re.sub('__(eq|ne|gt|lt|ge|le)$', '', s)
+    return re.sub('__(eq|ne|gt|lt|ge|le|li)$', '', s)
 
 
 def _comp_suffix(s):
@@ -327,6 +327,7 @@ class Comparison (Condition):
         suffixes = {
             '__eq': '=', '__ne': '!=',
             '__lt': '<', '__le': '<=', '__gt': '>', '__ge': '>=',
+            '__li': 'ilike'
         }
         for suffix, op in suffixes.items():
             if kw.endswith(suffix):
@@ -353,6 +354,9 @@ class Comparison (Condition):
             vals = [cursor.mogrify('%s', (v,)) for v in self.value]
             return '%s IN (%s)' % (field, ', '.join(vals))
         else:
+            if self.operator == "ilike":
+                self.value = '%' + self.value + '%'
+            
             paramed = '%s %s %s' % (field, self.operator, '%s')
             return cursor.mogrify(paramed, (self.value,))
 
