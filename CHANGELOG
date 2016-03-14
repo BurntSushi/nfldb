@@ -1,3 +1,7 @@
+0.2.15
+======
+- Revert PR #142.
+
 0.2.14
 ======
 - Fix #134 by bumping nflgame dependency.
