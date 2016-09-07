@@ -1,6 +1,13 @@
+0.2.16
+======
+- Updates for the 2016 season.
+- Includes database migration to add new LA team.
+
+
 0.2.15
 ======
 - Revert PR #142.
+
 
 0.2.14
 ======
