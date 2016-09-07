@@ -17,7 +17,7 @@ import nfldb.team
 
 __pdoc__ = {}
 
-api_version = 7
+api_version = 8
 __pdoc__['api_version'] = \
     """
     The schema version that this library corresponds to. When the schema
@@ -540,7 +540,7 @@ def _migrate_2(c):
     ''')
     c.execute('''
         INSERT INTO team (team_id, city, name) VALUES %s
-    ''' % (', '.join(_mogrify(c, team[0:3]) for team in nfldb.team.teams)))
+    ''' % (', '.join(_mogrify(c, team[0:3]) for team in nfldb.team.teams1)))
 
     c.execute('''
         CREATE TABLE player (
@@ -903,3 +903,9 @@ changed.
         AFTER INSERT OR UPDATE ON play_player
         FOR EACH ROW EXECUTE PROCEDURE agg_play_update();
     ''')
+
+
+def _migrate_8(c):
+    c.execute('''
+        INSERT INTO team (team_id, city, name) VALUES %s
+    ''' % (', '.join(_mogrify(c, team[0:3]) for team in nfldb.team.teams2)))

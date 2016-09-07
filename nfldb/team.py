@@ -2,7 +2,7 @@
 # a single point of truth, but I don't want to import nflgame outside of
 # the update script.
 
-teams = [
+teams1 = [
     ['ARI', 'Arizona', 'Cardinals', 'Arizona Cardinals'],
     ['ATL', 'Atlanta', 'Falcons', 'Atlanta Falcons'],
     ['BAL', 'Baltimore', 'Ravens', 'Baltimore Ravens'],
@@ -38,6 +38,10 @@ teams = [
     ['UNK', 'UNK', 'UNK'],
 ]
 
+teams2 = [
+    ['LA', 'Los Angeles', 'Rams', 'Los Angeles Rams', 'L.A.'],
+]
+
 
 def standard_team(team):
     """
@@ -49,8 +53,9 @@ def standard_team(team):
         return 'UNK'
 
     team = team.lower()
-    for variants in teams:
-        for variant in variants:
-            if team == variant.lower():
-                return variants[0]
+    for teams in [teams1, teams2]:
+        for variants in teams1:
+            for variant in variants:
+                if team == variant.lower():
+                    return variants[0]
     return 'UNK'
