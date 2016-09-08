@@ -49,12 +49,12 @@ def standard_team(team):
     known by nfldb (case insensitive). If no team can be found, then
     `"UNK"` is returned.
     """
-    if not team or team.lower == 'new york':
+    if not team or team.lower() == 'new york':
         return 'UNK'
 
     team = team.lower()
-    for teams in [teams1, teams2]:
-        for variants in teams1:
+    for teams in [teams2, teams1]:
+        for variants in teams:
             for variant in variants:
                 if team == variant.lower():
                     return variants[0]
