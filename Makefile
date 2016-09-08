@@ -10,11 +10,11 @@ docs: er
 	pdoc --html --html-dir ./doc --overwrite ./nfldb
 
 er:
-	nfldb-write-erd > /tmp/nfldb.er
+	./scripts/nfldb-write-erd > /tmp/nfldb.er
 	erd -i /tmp/nfldb.er -o doc/nfldb.pdf
 	erd -i /tmp/nfldb.er -o doc/nfldb.png
 
-	nfldb-write-erd --condense > /tmp/nfldb-condensed.er
+	./scripts/nfldb-write-erd --condense > /tmp/nfldb-condensed.er
 	erd -i /tmp/nfldb-condensed.er -o doc/nfldb-condensed.pdf
 	erd -i /tmp/nfldb-condensed.er -o doc/nfldb-condensed.png
 
